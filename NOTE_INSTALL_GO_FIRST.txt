@@ -1,0 +1,27 @@
+================================================================================
+  ⚠️  INSTALL GO FIRST ⚠️
+================================================================================
+
+Before publishing this SDK, you need to install Go.
+
+QUICK INSTALL (Windows):
+------------------------
+choco install golang
+
+OR download from:
+https://go.dev/dl/
+
+AFTER INSTALLING:
+-----------------
+1. Restart PowerShell
+2. Run: go version
+3. Follow PUBLISHING_GUIDE.md
+
+FULL INSTRUCTIONS:
+------------------
+See INSTALL_GO.md in this directory
+
+================================================================================
+The SDK is complete and ready to publish once Go is installed!
+================================================================================
+
