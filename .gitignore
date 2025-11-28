@@ -8,7 +8,7 @@ NAMESPACE_*.md
 *_ERROR.md
 verify-credentials.ps1
 upload-to-central-portal.ps1
-
+PUBLISHING_GUIDE.md
 # Go build artifacts
 *.exe
 *.exe~
@@ -18,4 +18,3 @@ upload-to-central-portal.ps1
 *.test
 *.out
 go.work
-
