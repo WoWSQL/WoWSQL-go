@@ -12,19 +12,27 @@ import (
 )
 
 // AuthConfig configures the project auth client.
+// UNIFIED AUTHENTICATION: Uses the same API keys (anon/service) as database operations.
 type AuthConfig struct {
 	ProjectURL   string
 	BaseDomain   string
 	Secure       bool
 	Timeout      time.Duration
+	// Unified API key - Anonymous Key (wowsql_anon_...) for client-side,
+	// or Service Role Key (wowsql_service_...) for server-side.
+	// UNIFIED AUTHENTICATION: Same key works for both auth and database operations.
+	APIKey string
+	// Deprecated: Use APIKey instead. Kept for backward compatibility.
 	PublicAPIKey string
 }
 
 // AuthClient handles project-level authentication endpoints.
+// UNIFIED AUTHENTICATION: Uses the same API keys (anon/service) as database operations.
 type AuthClient struct {
 	baseURL     string
 	httpClient  *http.Client
-	publicKey   string
+	apiKey      string // Unified API key (anon or service)
+	publicKey   string // Deprecated: same as apiKey, kept for backward compatibility
 	accessToken string
 	refreshToken string
 }
@@ -92,6 +100,7 @@ type loginResponse struct {
 }
 
 // NewAuthClient constructs a new project auth client.
+// UNIFIED AUTHENTICATION: Uses the same API keys (anon/service) as database operations.
 func NewAuthClient(config AuthConfig) *AuthClient {
 	base := buildAuthBaseURL(config.ProjectURL, config.BaseDomain, config.Secure)
 	timeout := config.Timeout
@@ -99,9 +108,16 @@ func NewAuthClient(config AuthConfig) *AuthClient {
 		timeout = 30 * time.Second
 	}
 
+	// UNIFIED AUTHENTICATION: Support both APIKey (new) and PublicAPIKey (deprecated)
+	unifiedKey := config.APIKey
+	if unifiedKey == "" {
+		unifiedKey = config.PublicAPIKey
+	}
+
 	return &AuthClient{
 		baseURL:   base,
-		publicKey: config.PublicAPIKey,
+		apiKey:    unifiedKey,
+		publicKey: unifiedKey, // Keep for backward compatibility
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -350,8 +366,12 @@ func (c *AuthClient) doRequest(method, path string, body interface{}, headers ma
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if c.publicKey != "" {
-		req.Header.Set("X-Wow-Public-Key", c.publicKey)
+	// UNIFIED AUTHENTICATION: Use Authorization header (same as database operations)
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	} else if c.publicKey != "" {
+		// Backward compatibility
+		req.Header.Set("Authorization", "Bearer "+c.publicKey)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)

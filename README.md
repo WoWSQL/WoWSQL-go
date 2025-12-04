@@ -135,7 +135,7 @@ import (
 func main() {
     auth := WOWSQL.NewAuthClient(WOWSQL.AuthConfig{
         ProjectURL:   "https://your-project.wowsql.com",
-        PublicAPIKey: "public-api-key",
+        APIKey: "your-anon-key",  // Use anon key for client-side, service key for server-side
     })
 
     // Sign up an end user
@@ -504,30 +504,34 @@ WOWSQL uses **different API keys for different operations**. Understanding which
 
 ### Key Types Overview
 
+## 🔑 Unified Authentication
+
+**✨ One Project = One Set of Keys for ALL Operations**
+
+WOWSQL uses **unified authentication** - the same API keys work for both database operations AND authentication operations.
+
 | Operation Type | Recommended Key | Alternative Key | Used By |
 |---------------|----------------|-----------------|---------|
-| **Database Operations** (CRUD) | Service Role Key (`wowbase_service_...`) | Anonymous Key (`wowbase_anon_...`) | `WOWSQLClient` |
-| **Authentication Operations** (OAuth, sign-in) | Public API Key (`wowbase_auth_...`) | Service Role Key (`wowbase_service_...`) | `ProjectAuthClient` |
+| **Database Operations** (CRUD) | Service Role Key (`wowsql_service_...`) | Anonymous Key (`wowsql_anon_...`) | `WOWSQLClient` |
+| **Authentication Operations** (OAuth, sign-in) | Anonymous Key (`wowsql_anon_...`) | Service Role Key (`wowsql_service_...`) | `ProjectAuthClient` |
 
 ### Where to Find Your Keys
 
-All keys are found in: **WOWSQL Dashboard → Authentication → PROJECT KEYS**
+All keys are found in: **WOWSQL Dashboard → Settings → API Keys** or **Authentication → PROJECT KEYS**
 
-1. **Service Role Key** (`wowbase_service_...`)
+1. **Anonymous Key** (`wowsql_anon_...`) ✨ **Unified Key**
+   - Location: "Anonymous Key (Public)"
+   - Used for: 
+     - ✅ Client-side auth operations (signup, login, OAuth)
+     - ✅ Public/client-side database operations with limited permissions
+   - **Safe to expose** in frontend code (browser, mobile apps)
+
+2. **Service Role Key** (`wowsql_service_...`) ✨ **Unified Key**
    - Location: "Service Role Key (keep secret)"
-   - Used for: Database CRUD operations (recommended for server-side)
-   - Can also be used for authentication operations (fallback)
-   - **Important**: Click the eye icon to reveal this key
-
-2. **Public API Key** (`wowbase_auth_...`)
-   - Location: "Public API Key"
-   - Used for: OAuth, sign-in, sign-up, user management
-   - Recommended for client-side/public authentication flows
-
-3. **Anonymous Key** (`wowbase_anon_...`)
-   - Location: "Anonymous Key"
-   - Used for: Public/client-side database operations with limited permissions
-   - Optional: Use when exposing database access to frontend/client
+   - Used for:
+     - ✅ Server-side auth operations (admin, full access)
+     - ✅ Server-side database operations (full access, bypass RLS)
+   - **NEVER expose** in frontend code - server-side only!
 
 ### Database Operations
 
@@ -541,13 +545,13 @@ import "github.com/wowsql/wowsql-go/WOWSQL"
 // Using Service Role Key (recommended for server-side, full access)
 client := WOWSQL.NewClient(
     "https://your-project.wowsql.com",
-    "wowbase_service_your-service-key-here",  // Service Role Key
+    "wowsql_service_your-service-key-here",  // Service Role Key
 )
 
 // Using Anonymous Key (for public/client-side access with limited permissions)
 client := WOWSQL.NewClient(
     "https://your-project.wowsql.com",
-    "wowbase_anon_your-anon-key-here",  // Anonymous Key
+    "wowsql_anon_your-anon-key-here",  // Anonymous Key
 )
 
 // Query data
@@ -556,28 +560,30 @@ users, err := client.Table("users").Execute()
 
 ### Authentication Operations
 
-Use **Public API Key** or **Service Role Key** for authentication:
+**✨ UNIFIED AUTHENTICATION:** Use the **same keys** as database operations!
 
 ```go
 package main
 
 import "github.com/wowsql/wowsql-go/WOWSQL"
 
-// Using Public API Key (recommended for OAuth, sign-in, sign-up)
+// Using Anonymous Key (recommended for client-side auth operations)
 auth := WOWSQL.NewAuthClient(WOWSQL.AuthConfig{
-    ProjectURL:   "https://your-project.wowsql.com",
-    PublicAPIKey: "wowbase_auth_your-public-key-here",  // Public API Key
+    ProjectURL: "https://your-project.wowsql.com",
+    APIKey:     "wowsql_anon_your-anon-key-here",  // Same key as database operations!
 })
 
-// Using Service Role Key (can be used for auth operations too)
+// Using Service Role Key (for server-side auth operations)
 auth := WOWSQL.NewAuthClient(WOWSQL.AuthConfig{
-    ProjectURL:   "https://your-project.wowsql.com",
-    PublicAPIKey: "wowbase_service_your-service-key-here",  // Service Role Key
+    ProjectURL: "https://your-project.wowsql.com",
+    APIKey:     "wowsql_service_your-service-key-here",  // Same key as database operations!
 })
 
 // OAuth authentication
 oauthResp, err := auth.GetOAuthAuthorizationURL("github", "https://app.example.com/auth/callback")
 ```
+
+**Note:** The `PublicAPIKey` parameter is deprecated but still works for backward compatibility. Use `APIKey` instead.
 
 ### Environment Variables
 
@@ -591,31 +597,35 @@ import (
     "github.com/wowsql/wowsql-go/WOWSQL"
 )
 
+// UNIFIED AUTHENTICATION: Same keys for both operations!
+
 // Database operations - Service Role Key
 dbClient := WOWSQL.NewClient(
     os.Getenv("WOWSQL_PROJECT_URL"),
     os.Getenv("WOWSQL_SERVICE_ROLE_KEY"),  // or WOWSQL_ANON_KEY
 )
 
-// Authentication operations - Public API Key
+// Authentication operations - Use the SAME key!
 authClient := WOWSQL.NewAuthClient(WOWSQL.AuthConfig{
-    ProjectURL:   os.Getenv("WOWSQL_PROJECT_URL"),
-    PublicAPIKey: os.Getenv("WOWSQL_PUBLIC_API_KEY"),
+    ProjectURL: os.Getenv("WOWSQL_PROJECT_URL"),
+    APIKey:     os.Getenv("WOWSQL_ANON_KEY"),  // Same key for client-side auth
+    // Or use WOWSQL_SERVICE_ROLE_KEY for server-side auth
 })
 ```
 
 ### Key Usage Summary
 
+**✨ UNIFIED AUTHENTICATION:**
 - **`WOWSQLClient`** → Uses **Service Role Key** or **Anonymous Key** for database operations
-- **`ProjectAuthClient`** → Uses **Public API Key** or **Service Role Key** for authentication operations
-- **Service Role Key** can be used for both database AND authentication operations
-- **Public API Key** is specifically for authentication operations only
-- **Anonymous Key** is optional and provides limited permissions for public database access
+- **`ProjectAuthClient`** → Uses **Anonymous Key** (client-side) or **Service Role Key** (server-side) for authentication operations
+- **Same keys work for both** database AND authentication operations! 🎉
+- **Anonymous Key** (`wowsql_anon_...`) → Client-side operations (auth + database)
+- **Service Role Key** (`wowsql_service_...`) → Server-side operations (auth + database)
 
 ### Security Best Practices
 
 1. **Never expose Service Role Key** in client-side code or public repositories
-2. **Use Public API Key** for client-side authentication flows
+2. **Use Anonymous Key** for client-side authentication flows (same key as database operations)
 3. **Use Anonymous Key** for public database access with limited permissions
 4. **Store keys in environment variables**, never hardcode them
 5. **Rotate keys regularly** if compromised
@@ -833,11 +843,11 @@ if err != nil {
 **Error: "Invalid API key for project"**
 - Ensure you're using the correct key type for the operation
 - Database operations require Service Role Key or Anonymous Key
-- Authentication operations require Public API Key or Service Role Key
+- Authentication operations require Anonymous Key (client-side) or Service Role Key (server-side)
 - Verify the key is copied correctly (no extra spaces)
 
 **Error: "Authentication failed"**
-- Check that you're using Public API Key (not Anonymous Key) for auth operations
+- Check that you're using the correct key: Anonymous Key for client-side, Service Role Key for server-side
 - Verify the project URL matches your dashboard
 - Ensure the key hasn't been revoked or expired
 
