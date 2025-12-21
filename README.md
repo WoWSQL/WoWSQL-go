@@ -10,7 +10,13 @@ Official Go SDK for [WOWSQL](https://wowsql.com) - MySQL Backend-as-a-Service wi
 
 ### Database Features
 - 🗄️ Full CRUD operations (Create, Read, Update, Delete)
-- 🔍 Advanced filtering (eq, neq, gt, gte, lt, lte, like, isNull)
+- 🔍 Advanced filtering (eq, neq, gt, gte, lt, lte, like, isNull, in, notIn, between, notBetween)
+- 🔗 Logical operators (AND, OR)
+- 📊 GROUP BY and aggregate functions (COUNT, SUM, AVG, MAX, MIN)
+- 🎯 HAVING clause for filtering aggregated results
+- 📈 Multiple ORDER BY columns
+- 📅 Date/time functions in SELECT and filters
+- 🧮 Expressions in SELECT (e.g., "COUNT(*)", "DATE(created_at) as date")
 - 📄 Pagination (limit, offset)
 - 📊 Sorting (orderBy)
 - 🎯 Fluent query builder API
@@ -319,6 +325,131 @@ deleted, err := client.Table("users").
 
 // Is null
 .IsNull("deleted_at")
+
+// IN operator
+.In("category", []interface{}{"electronics", "books", "clothing"})
+
+// NOT IN operator
+.NotIn("status", []interface{}{"deleted", "archived"})
+
+// BETWEEN operator
+.Between("price", 10, 100)
+
+// NOT BETWEEN operator
+.NotBetween("age", 18, 65)
+
+// OR logical operator
+.Or("category", "eq", "electronics")
+```
+
+## Advanced Query Features
+
+### GROUP BY and Aggregates
+
+GROUP BY supports both simple column names and SQL expressions with functions. All expressions are validated for security.
+
+#### Basic GROUP BY
+
+```go
+// Group by single column
+result, err := client.Table("products").
+    Select("category", "COUNT(*) as count", "AVG(price) as avg_price").
+    GroupBy("category").
+    Execute()
+
+// Group by multiple columns
+result, err := client.Table("sales").
+    Select("region", "category", "SUM(amount) as total").
+    GroupBy("region", "category").
+    Execute()
+```
+
+#### GROUP BY with Date/Time Functions
+
+```go
+// Group by date
+result, err := client.Table("orders").
+    Select("DATE(created_at) as date", "COUNT(*) as orders", "SUM(total) as revenue").
+    GroupBy("DATE(created_at)").
+    OrderBy("date", WOWSQL.SortDesc).
+    Execute()
+
+// Group by year and month
+result, err := client.Table("orders").
+    Select("YEAR(created_at) as year", "MONTH(created_at) as month", "SUM(total) as revenue").
+    GroupBy("YEAR(created_at)", "MONTH(created_at)").
+    Execute()
+```
+
+#### Supported Functions in GROUP BY
+
+**Date/Time:** `DATE()`, `YEAR()`, `MONTH()`, `DAY()`, `WEEK()`, `QUARTER()`, `HOUR()`, `MINUTE()`, `SECOND()`, `DATE_FORMAT()`, `DATE_ADD()`, `DATE_SUB()`, `DATEDIFF()`, `NOW()`, `CURRENT_TIMESTAMP()`, etc.
+
+**String:** `CONCAT()`, `SUBSTRING()`, `LEFT()`, `RIGHT()`, `UPPER()`, `LOWER()`, `LENGTH()`, `TRIM()`, etc.
+
+**Mathematical:** `ROUND()`, `CEIL()`, `FLOOR()`, `ABS()`, `POW()`, `SQRT()`, `MOD()`, etc.
+
+### HAVING Clause
+
+HAVING filters aggregated results after GROUP BY. Supports aggregate functions and comparison operators.
+
+```go
+// Filter aggregated results
+result, err := client.Table("products").
+    Select("category", "COUNT(*) as count").
+    GroupBy("category").
+    Having("COUNT(*)", "gt", 10).
+    Execute()
+
+// Multiple HAVING conditions
+result, err := client.Table("orders").
+    Select("DATE(created_at) as date", "SUM(total) as revenue").
+    GroupBy("DATE(created_at)").
+    Having("SUM(total)", "gt", 1000).
+    Having("COUNT(*)", "gte", 5).
+    Execute()
+
+// HAVING with different aggregate functions
+result, err := client.Table("products").
+    Select("category", "AVG(price) as avg_price", "COUNT(*) as count").
+    GroupBy("category").
+    Having("AVG(price)", "gt", 100).
+    Having("COUNT(*)", "gte", 5).
+    Execute()
+```
+
+**Supported HAVING Operators:** `eq`, `neq`, `gt`, `gte`, `lt`, `lte`
+
+**Supported Aggregate Functions:** `COUNT(*)`, `SUM()`, `AVG()`, `MAX()`, `MIN()`, `GROUP_CONCAT()`, `STDDEV()`, `VARIANCE()`
+
+### Multiple ORDER BY
+
+```go
+// Order by multiple columns
+result, err := client.Table("products").
+    Select("*").
+    OrderByMultiple([]WOWSQL.OrderByItem{
+        {Column: "category", Direction: WOWSQL.SortAsc},
+        {Column: "price", Direction: WOWSQL.SortDesc},
+        {Column: "created_at", Direction: WOWSQL.SortDesc},
+    }).
+    Execute()
+```
+
+### Date/Time Functions
+
+```go
+// Filter by date range using functions
+result, err := client.Table("orders").
+    Select("*").
+    Filter("created_at", "gte", "DATE_SUB(NOW(), INTERVAL 7 DAY)").
+    Execute()
+
+// Group by date
+result, err := client.Table("orders").
+    Select("DATE(created_at) as date", "COUNT(*) as count").
+    GroupBy("DATE(created_at)").
+    Execute()
 ```
 
 ### Storage Operations
