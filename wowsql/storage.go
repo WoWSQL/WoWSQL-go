@@ -7,6 +7,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -277,6 +280,146 @@ func (s *StorageClient) doRequest(method, path string, body interface{}) ([]byte
 	}
 
 	return respBody, nil
+}
+
+// extractProjectSlug extracts the project slug from a project URL
+func (s *StorageClient) extractProjectSlug() string {
+	projectURL := strings.TrimSpace(s.projectURL)
+	
+	// If it's a full URL, extract the subdomain
+	if strings.HasPrefix(projectURL, "http://") || strings.HasPrefix(projectURL, "https://") {
+		parsedURL, err := url.Parse(projectURL)
+		if err == nil {
+			host := parsedURL.Host
+			// Remove port if present
+			if idx := strings.Index(host, ":"); idx != -1 {
+				host = host[:idx]
+			}
+			// Extract subdomain (project slug)
+			parts := strings.Split(host, ".")
+			if len(parts) > 0 {
+				return parts[0]
+			}
+		}
+	}
+	
+	// If it contains a dot, it might be "project.wowsql.com" format
+	if strings.Contains(projectURL, ".") {
+		parts := strings.Split(projectURL, ".")
+		if len(parts) > 0 {
+			return parts[0]
+		}
+	}
+	
+	// Otherwise, assume it's already just the slug
+	return projectURL
+}
+
+// GetFileUrl gets a presigned URL with full metadata (similar to Python's get_file_url)
+func (s *StorageClient) GetFileUrl(key string, expiresIn int) (map[string]interface{}, error) {
+	projectSlug := s.extractProjectSlug()
+	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/files/%s/url?expires_in=%d", projectSlug, key, expiresIn)
+	resp, err := s.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetPresignedUrl generates a presigned URL for file operations
+func (s *StorageClient) GetPresignedUrl(key string, expiresIn int, operation string) (string, error) {
+	projectSlug := s.extractProjectSlug()
+	body := map[string]interface{}{
+		"file_key":   key,
+		"expires_in": expiresIn,
+		"operation":  operation,
+	}
+
+	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/presigned-url", projectSlug)
+	resp, err := s.doRequest("POST", path, body)
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result.URL, nil
+}
+
+// GetStorageInfo gets S3 storage information for the project
+func (s *StorageClient) GetStorageInfo() (map[string]interface{}, error) {
+	projectSlug := s.extractProjectSlug()
+	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/info", projectSlug)
+	resp, err := s.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}
+
+// ProvisionStorage provisions S3 storage for the project
+// ⚠️ IMPORTANT: Save the credentials returned! They're only shown once.
+func (s *StorageClient) ProvisionStorage(region string) (map[string]interface{}, error) {
+	projectSlug := s.extractProjectSlug()
+	body := map[string]interface{}{
+		"region": region,
+	}
+
+	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/provision", projectSlug)
+	resp, err := s.doRequest("POST", path, body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}
+
+// GetAvailableRegions gets list of available S3 regions with pricing
+func (s *StorageClient) GetAvailableRegions() ([]map[string]interface{}, error) {
+	resp, err := s.doRequest("GET", "/api/v1/storage/s3/regions", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []map[string]interface{}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return result, nil
+}
+
+// UploadFromPath uploads a file from local filesystem path
+func (s *StorageClient) UploadFromPath(filePath string, key string, contentType string, checkQuota *bool) (*FileUploadResult, error) {
+	// Read file from path
+	fileData, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	return s.Upload(fileData, key, contentType, checkQuota)
 }
 
 // formatBytes formats bytes to human-readable string

@@ -93,18 +93,18 @@ go test ./...
 git add .
 
 # Commit
-git commit -m "release v1.1.0"
+git commit -m "release v1.4.0"
 
 # Push to GitHub
-git push origin main
+git push origin 
 ```
 
 ### Step 4: Create Git Tag
 
 ```bash
 # Create and push tag
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.4.0
+git push origin v1.4.0
 ```
 
 ### Step 5: Publish to pkg.go.dev
@@ -153,7 +153,7 @@ go run main.go
 ```
 
 ---
-
+main
 ## 🎯 Quick Publish Script
 
 Create `publish.sh`:

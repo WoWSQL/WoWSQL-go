@@ -344,6 +344,152 @@ func (c *AuthClient) ClearSession() {
 	c.refreshToken = ""
 }
 
+// SendOTP sends an OTP code to user's email.
+// Supports login, signup, and password_reset purposes.
+func (c *AuthClient) SendOTP(email, purpose string) (map[string]interface{}, error) {
+	if purpose != "login" && purpose != "signup" && purpose != "password_reset" {
+		return nil, fmt.Errorf("purpose must be 'login', 'signup', or 'password_reset'")
+	}
+
+	payload := map[string]interface{}{
+		"email":   email,
+		"purpose": purpose,
+	}
+
+	body, err := c.doRequest("POST", "/otp/send", payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse send OTP response: %w", err)
+	}
+
+	return result, nil
+}
+
+// VerifyOTP verifies OTP and completes authentication.
+// For signup: Creates new user if doesn't exist
+// For login: Authenticates existing user
+// For password_reset: Updates password if newPassword provided
+func (c *AuthClient) VerifyOTP(email, otp, purpose string, newPassword *string) (*AuthResult, error) {
+	if purpose != "login" && purpose != "signup" && purpose != "password_reset" {
+		return nil, fmt.Errorf("purpose must be 'login', 'signup', or 'password_reset'")
+	}
+
+	if purpose == "password_reset" && newPassword == nil {
+		return nil, fmt.Errorf("newPassword is required for password_reset purpose")
+	}
+
+	payload := map[string]interface{}{
+		"email":   email,
+		"otp":     otp,
+		"purpose": purpose,
+	}
+	if newPassword != nil {
+		payload["new_password"] = *newPassword
+	}
+
+	body, err := c.doRequest("POST", "/otp/verify", payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if purpose == "password_reset" {
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("failed to parse verify OTP response: %w", err)
+		}
+		return &AuthResult{
+			User:    nil,
+			Session: AuthSession{},
+		}, nil
+	}
+
+	var resp authResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse verify OTP response: %w", err)
+	}
+
+	session := AuthSession{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+		TokenType:    resp.TokenType,
+		ExpiresIn:    resp.ExpiresIn,
+	}
+	c.persistSession(session)
+
+	return &AuthResult{
+		User:    resp.User,
+		Session: session,
+	}, nil
+}
+
+// SendMagicLink sends a magic link to user's email.
+// Supports login, signup, and email_verification purposes.
+func (c *AuthClient) SendMagicLink(email, purpose string) (map[string]interface{}, error) {
+	if purpose != "login" && purpose != "signup" && purpose != "email_verification" {
+		return nil, fmt.Errorf("purpose must be 'login', 'signup', or 'email_verification'")
+	}
+
+	payload := map[string]interface{}{
+		"email":   email,
+		"purpose": purpose,
+	}
+
+	body, err := c.doRequest("POST", "/magic-link/send", payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse send magic link response: %w", err)
+	}
+
+	return result, nil
+}
+
+// VerifyEmail verifies email using token (from magic link or OTP verification).
+func (c *AuthClient) VerifyEmail(token string) (map[string]interface{}, error) {
+	payload := map[string]interface{}{
+		"token": token,
+	}
+
+	body, err := c.doRequest("POST", "/verify-email", payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse verify email response: %w", err)
+	}
+
+	return result, nil
+}
+
+// ResendVerification resends verification email.
+// Always returns success to prevent email enumeration.
+func (c *AuthClient) ResendVerification(email string) (map[string]interface{}, error) {
+	payload := map[string]interface{}{
+		"email": email,
+	}
+
+	body, err := c.doRequest("POST", "/resend-verification", payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse resend verification response: %w", err)
+	}
+
+	return result, nil
+}
+
 func (c *AuthClient) persistSession(session AuthSession) {
 	c.accessToken = session.AccessToken
 	c.refreshToken = session.RefreshToken
