@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// WOWSQLError represents a base WOWSQL error
+// WOWSQLError represents a base WOWSQL error.
 type WOWSQLError struct {
 	Message    string
 	StatusCode int
@@ -19,22 +19,22 @@ func (e *WOWSQLError) Error() string {
 	return fmt.Sprintf("WOWSQLError: %s", e.Message)
 }
 
-// AuthenticationError represents authentication errors
+// AuthenticationError represents authentication errors (401/403).
 type AuthenticationError struct {
 	WOWSQLError
 }
 
-// NotFoundError represents not found errors
+// NotFoundError represents not found errors (404).
 type NotFoundError struct {
 	WOWSQLError
 }
 
-// RateLimitError represents rate limit errors
+// RateLimitError represents rate limit errors (429).
 type RateLimitError struct {
 	WOWSQLError
 }
 
-// NetworkError represents network errors
+// NetworkError represents network/transport errors.
 type NetworkError struct {
 	Err error
 }
@@ -47,7 +47,7 @@ func (e *NetworkError) Unwrap() error {
 	return e.Err
 }
 
-// StorageError represents storage errors
+// StorageError represents storage-specific errors.
 type StorageError struct {
 	Message    string
 	StatusCode int
@@ -69,7 +69,7 @@ func (e *StorageError) Unwrap() error {
 	return e.Err
 }
 
-// StorageLimitExceededError represents storage limit exceeded errors
+// StorageLimitExceededError represents storage limit exceeded errors (413).
 type StorageLimitExceededError struct {
 	Message        string
 	RequiredBytes  int64
@@ -88,7 +88,17 @@ func (e *StorageLimitExceededError) Error() string {
 	return fmt.Sprintf("StorageLimitExceededError: %s", e.Message)
 }
 
-// parseError parses an error response
+// SchemaPermissionError represents a 403 from schema endpoints
+// (service role key required).
+type SchemaPermissionError struct {
+	WOWSQLError
+}
+
+func (e *SchemaPermissionError) Error() string {
+	return fmt.Sprintf("SchemaPermissionError(403): %s", e.Message)
+}
+
+// parseError parses an error response into the appropriate error type.
 func parseError(statusCode int, body []byte) error {
 	var errorResponse map[string]interface{}
 	_ = json.Unmarshal(body, &errorResponse)
@@ -140,7 +150,7 @@ func parseError(statusCode int, body []byte) error {
 	}
 }
 
-// parseStorageError parses a storage error response
+// parseStorageError parses a storage error response.
 func parseStorageError(statusCode int, body []byte) error {
 	var errorResponse map[string]interface{}
 	_ = json.Unmarshal(body, &errorResponse)
@@ -172,4 +182,3 @@ func parseStorageError(statusCode int, body []byte) error {
 		Response:   errorResponse,
 	}
 }
-

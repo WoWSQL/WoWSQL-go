@@ -2,6 +2,7 @@ package WOWSQL
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,117 +10,276 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// StorageClient represents the S3 storage client
+// ── Storage client options ──────────────────────────────────────
+
+// StorageClientOption configures the StorageClient.
+type StorageClientOption func(*storageClientConfig)
+
+type storageClientConfig struct {
+	baseDomain string
+	secure     bool
+	timeout    time.Duration
+	verifySSL  bool
+}
+
+// StorageWithBaseDomain sets the base domain.
+func StorageWithBaseDomain(domain string) StorageClientOption {
+	return func(c *storageClientConfig) { c.baseDomain = domain }
+}
+
+// StorageWithSecure toggles HTTPS.
+func StorageWithSecure(secure bool) StorageClientOption {
+	return func(c *storageClientConfig) { c.secure = secure }
+}
+
+// StorageWithTimeout sets the HTTP timeout.
+func StorageWithTimeout(d time.Duration) StorageClientOption {
+	return func(c *storageClientConfig) { c.timeout = d }
+}
+
+// StorageWithVerifySSL enables/disables SSL verification.
+func StorageWithVerifySSL(verify bool) StorageClientOption {
+	return func(c *storageClientConfig) { c.verifySSL = verify }
+}
+
+// ── Bucket create options ───────────────────────────────────────
+
+// BucketOption configures a CreateBucket call.
+type BucketOption func(map[string]interface{})
+
+// BucketPublic sets the bucket public flag.
+func BucketPublic(public bool) BucketOption {
+	return func(m map[string]interface{}) { m["public"] = public }
+}
+
+// BucketFileSizeLimit sets the maximum file size in bytes.
+func BucketFileSizeLimit(limit int64) BucketOption {
+	return func(m map[string]interface{}) { m["file_size_limit"] = limit }
+}
+
+// BucketAllowedMimeTypes restricts allowed MIME types.
+func BucketAllowedMimeTypes(types []string) BucketOption {
+	return func(m map[string]interface{}) { m["allowed_mime_types"] = types }
+}
+
+// ── Upload options ──────────────────────────────────────────────
+
+// UploadOption configures an Upload call.
+type UploadOption func(*uploadConfig)
+
+type uploadConfig struct {
+	path     string
+	fileName string
+}
+
+// UploadPath sets the file path inside the bucket.
+func UploadPath(path string) UploadOption {
+	return func(c *uploadConfig) { c.path = path }
+}
+
+// UploadFileName overrides the file name.
+func UploadFileName(name string) UploadOption {
+	return func(c *uploadConfig) { c.fileName = name }
+}
+
+// ── List files options ──────────────────────────────────────────
+
+// ListFilesOption configures a ListFiles call.
+type ListFilesOption func(url.Values)
+
+// ListFilesPrefix filters by path prefix.
+func ListFilesPrefix(prefix string) ListFilesOption {
+	return func(v url.Values) { v.Set("prefix", prefix) }
+}
+
+// ListFilesLimit sets the max number of files returned.
+func ListFilesLimit(limit int) ListFilesOption {
+	return func(v url.Values) { v.Set("limit", fmt.Sprintf("%d", limit)) }
+}
+
+// ListFilesOffset sets the offset for pagination.
+func ListFilesOffset(offset int) ListFilesOption {
+	return func(v url.Values) { v.Set("offset", fmt.Sprintf("%d", offset)) }
+}
+
+// ── StorageClient ───────────────────────────────────────────────
+
+// StorageClient provides PostgreSQL-native file storage.
 type StorageClient struct {
-	projectURL     string
-	apiKey         string
-	httpClient     *http.Client
-	autoCheckQuota bool
+	baseURL     string
+	projectSlug string
+	apiKey      string
+	httpClient  *http.Client
 }
 
-// NewStorageClient creates a new storage client
-func NewStorageClient(projectURL, apiKey string) *StorageClient {
+// NewStorageClient creates a new storage client.
+//
+// projectURL can be a slug, domain, or full URL.
+func NewStorageClient(projectURL, apiKey string, opts ...StorageClientOption) *StorageClient {
+	cfg := &storageClientConfig{
+		baseDomain: "wowsql.com",
+		secure:     true,
+		timeout:    60 * time.Second,
+		verifySSL:  true,
+	}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	baseURL, slug := buildStorageURLs(projectURL, cfg.baseDomain, cfg.secure)
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if !cfg.verifySSL {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+
 	return &StorageClient{
-		projectURL:     projectURL,
-		apiKey:         apiKey,
-		autoCheckQuota: true,
+		baseURL:     baseURL,
+		projectSlug: slug,
+		apiKey:      apiKey,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout:   cfg.timeout,
+			Transport: transport,
 		},
 	}
 }
 
-// NewStorageClientWithOptions creates a new storage client with options
-func NewStorageClientWithOptions(projectURL, apiKey string, timeout time.Duration, autoCheckQuota bool) *StorageClient {
-	return &StorageClient{
-		projectURL:     projectURL,
-		apiKey:         apiKey,
-		autoCheckQuota: autoCheckQuota,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
-	}
-}
+// ── Bucket methods ──────────────────────────────────────────────
 
-// GetQuota retrieves storage quota information
-func (s *StorageClient) GetQuota() (*StorageQuota, error) {
-	resp, err := s.doRequest("GET", "/api/v1/storage/quota", nil)
+// CreateBucket creates a new storage bucket.
+func (s *StorageClient) CreateBucket(name string, opts ...BucketOption) (*StorageBucket, error) {
+	body := map[string]interface{}{"name": name}
+	for _, o := range opts {
+		o(body)
+	}
+
+	resp, err := s.doJSON("POST", s.bucketsPath(), body)
 	if err != nil {
 		return nil, err
 	}
 
-	var quota StorageQuota
-	if err := json.Unmarshal(resp, &quota); err != nil {
+	var bucket StorageBucket
+	if err := json.Unmarshal(resp, &bucket); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-
-	return &quota, nil
+	return &bucket, nil
 }
 
-// Upload uploads a file to storage
-func (s *StorageClient) Upload(fileData []byte, key string, contentType string, checkQuota *bool) (*FileUploadResult, error) {
-	shouldCheck := s.autoCheckQuota
-	if checkQuota != nil {
-		shouldCheck = *checkQuota
+// ListBuckets lists all buckets in the project.
+func (s *StorageClient) ListBuckets() ([]StorageBucket, error) {
+	resp, err := s.doJSON("GET", s.bucketsPath(), nil)
+	if err != nil {
+		return nil, err
 	}
 
-	// Check quota if enabled
-	if shouldCheck {
-		quota, err := s.GetQuota()
-		if err != nil {
-			return nil, err
-		}
+	var buckets []StorageBucket
+	if err := json.Unmarshal(resp, &buckets); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return buckets, nil
+}
 
-		if quota.StorageAvailableBytes < int64(len(fileData)) {
-			return nil, &StorageLimitExceededError{
-				Message:        fmt.Sprintf("Storage limit exceeded. Need %s, but only %s available.", formatBytes(int64(len(fileData))), formatBytes(quota.StorageAvailableBytes)),
-				RequiredBytes:  int64(len(fileData)),
-				AvailableBytes: quota.StorageAvailableBytes,
-			}
-		}
+// GetBucket gets a specific bucket by name.
+func (s *StorageClient) GetBucket(name string) (*StorageBucket, error) {
+	resp, err := s.doJSON("GET", s.bucketsPath()+"/"+name, nil)
+	if err != nil {
+		return nil, err
 	}
 
-	// Create multipart form
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
+	var bucket StorageBucket
+	if err := json.Unmarshal(resp, &bucket); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &bucket, nil
+}
 
-	// Add key field
-	if err := writer.WriteField("key", key); err != nil {
-		return nil, fmt.Errorf("failed to write key field: %w", err)
+// UpdateBucket updates bucket settings.
+func (s *StorageClient) UpdateBucket(name string, opts ...BucketOption) (*StorageBucket, error) {
+	body := make(map[string]interface{})
+	for _, o := range opts {
+		o(body)
 	}
 
-	// Add content type if provided
-	if contentType != "" {
-		if err := writer.WriteField("content_type", contentType); err != nil {
-			return nil, fmt.Errorf("failed to write content_type field: %w", err)
-		}
+	resp, err := s.doJSON("PATCH", s.bucketsPath()+"/"+name, body)
+	if err != nil {
+		return nil, err
 	}
 
-	// Add file
-	part, err := writer.CreateFormFile("file", key)
+	var bucket StorageBucket
+	if err := json.Unmarshal(resp, &bucket); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &bucket, nil
+}
+
+// DeleteBucket deletes a bucket and all its files.
+func (s *StorageClient) DeleteBucket(name string) (map[string]interface{}, error) {
+	resp, err := s.doJSON("DELETE", s.bucketsPath()+"/"+name, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ── File methods ────────────────────────────────────────────────
+
+// Upload uploads a file to a bucket from an io.Reader.
+func (s *StorageClient) Upload(bucketName string, reader io.Reader, opts ...UploadOption) (*StorageFile, error) {
+	cfg := &uploadConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read upload data: %w", err)
+	}
+
+	name := cfg.fileName
+	if name == "" && cfg.path != "" {
+		name = filepath.Base(cfg.path)
+	}
+	if name == "" {
+		name = "file"
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	part, err := writer.CreateFormFile("file", name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create form file: %w", err)
 	}
-
-	if _, err := part.Write(fileData); err != nil {
+	if _, err := part.Write(content); err != nil {
 		return nil, fmt.Errorf("failed to write file data: %w", err)
 	}
-
 	if err := writer.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	// Make request
-	url := s.projectURL + "/api/v1/storage/upload"
-	req, err := http.NewRequest("POST", url, body)
+	uploadPath := fmt.Sprintf("%s/%s/files", s.bucketsPath(), bucketName)
+
+	// Add folder param if path contains directory separators
+	if cfg.path != "" && strings.Contains(cfg.path, "/") {
+		folder := cfg.path[:strings.LastIndex(cfg.path, "/")]
+		uploadPath += "?folder=" + url.QueryEscape(folder)
+	}
+
+	reqURL := s.baseURL + uploadPath
+	req, err := http.NewRequest("POST", reqURL, &buf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
 
@@ -138,113 +298,165 @@ func (s *StorageClient) Upload(fileData []byte, key string, contentType string, 
 		return nil, parseStorageError(resp.StatusCode, respBody)
 	}
 
-	var result FileUploadResult
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// Download gets a presigned URL for downloading a file
-func (s *StorageClient) Download(key string, expiresIn int) (string, error) {
-	url := fmt.Sprintf("/api/v1/storage/download?key=%s&expires_in=%d", key, expiresIn)
-	resp, err := s.doRequest("GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	var result struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result.URL, nil
-}
-
-// ListFiles lists files in storage
-func (s *StorageClient) ListFiles(prefix string, limit int) ([]StorageFile, error) {
-	url := "/api/v1/storage/list"
-	if prefix != "" || limit > 0 {
-		url += "?"
-		if prefix != "" {
-			url += fmt.Sprintf("prefix=%s", prefix)
-		}
-		if limit > 0 {
-			if prefix != "" {
-				url += "&"
-			}
-			url += fmt.Sprintf("limit=%d", limit)
-		}
-	}
-
-	resp, err := s.doRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Files []StorageFile `json:"files"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result.Files, nil
-}
-
-// DeleteFile deletes a single file
-func (s *StorageClient) DeleteFile(key string) error {
-	body := map[string]interface{}{
-		"key": key,
-	}
-
-	_, err := s.doRequest("DELETE", "/api/v1/storage/delete", body)
-	return err
-}
-
-// DeleteFiles deletes multiple files
-func (s *StorageClient) DeleteFiles(keys []string) error {
-	body := map[string]interface{}{
-		"keys": keys,
-	}
-
-	_, err := s.doRequest("DELETE", "/api/v1/storage/delete-batch", body)
-	return err
-}
-
-// GetFileInfo gets information about a file
-func (s *StorageClient) GetFileInfo(key string) (*StorageFile, error) {
-	url := fmt.Sprintf("/api/v1/storage/info?key=%s", key)
-	resp, err := s.doRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	var file StorageFile
-	if err := json.Unmarshal(resp, &file); err != nil {
+	if err := json.Unmarshal(respBody, &file); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
-
 	return &file, nil
 }
 
-// FileExists checks if a file exists
-func (s *StorageClient) FileExists(key string) (bool, error) {
-	_, err := s.GetFileInfo(key)
+// UploadFromPath uploads a file from a local filesystem path.
+func (s *StorageClient) UploadFromPath(filePath, bucketName string, remotePath ...string) (*StorageFile, error) {
+	f, err := os.Open(filePath)
 	if err != nil {
-		if _, ok := err.(*NotFoundError); ok {
-			return false, nil
-		}
-		return false, err
+		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	return true, nil
+	defer f.Close()
+
+	rp := filepath.Base(filePath)
+	if len(remotePath) > 0 && remotePath[0] != "" {
+		rp = remotePath[0]
+	}
+
+	return s.Upload(bucketName, f,
+		UploadPath(rp),
+		UploadFileName(filepath.Base(filePath)),
+	)
 }
 
-// doRequest performs an HTTP request
-func (s *StorageClient) doRequest(method, path string, body interface{}) ([]byte, error) {
+// ListFiles lists files in a bucket.
+func (s *StorageClient) ListFiles(bucketName string, opts ...ListFilesOption) ([]StorageFile, error) {
+	params := url.Values{}
+	params.Set("limit", "100")
+	params.Set("offset", "0")
+	for _, o := range opts {
+		o(params)
+	}
+
+	path := fmt.Sprintf("%s/%s/files?%s", s.bucketsPath(), bucketName, params.Encode())
+	resp, err := s.doJSON("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// API may return a list or an object with files key
+	var files []StorageFile
+	if json.Unmarshal(resp, &files) == nil {
+		return files, nil
+	}
+
+	var wrapper struct {
+		Files []StorageFile `json:"files"`
+		Data  []StorageFile `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &wrapper); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	if len(wrapper.Files) > 0 {
+		return wrapper.Files, nil
+	}
+	return wrapper.Data, nil
+}
+
+// Download downloads a file and returns its binary contents.
+func (s *StorageClient) Download(bucketName, filePath string) ([]byte, error) {
+	reqURL := fmt.Sprintf("%s/api/v1/storage/projects/%s/files/%s/%s",
+		s.baseURL, s.projectSlug, bucketName, filePath)
+
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, &StorageError{Err: err}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, parseStorageError(resp.StatusCode, body)
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+// DownloadToFile downloads a file and saves it to a local path.
+func (s *StorageClient) DownloadToFile(bucketName, filePath, localPath string) error {
+	content, err := s.Download(bucketName, filePath)
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(localPath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("failed to create directory: %w", err)
+		}
+	}
+
+	return os.WriteFile(localPath, content, 0o644)
+}
+
+// DeleteFile deletes a file from a bucket.
+func (s *StorageClient) DeleteFile(bucketName, filePath string) (map[string]interface{}, error) {
+	path := fmt.Sprintf("/api/v1/storage/projects/%s/files/%s/%s",
+		s.projectSlug, bucketName, filePath)
+
+	resp, err := s.doJSON("DELETE", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// ── Utilities ───────────────────────────────────────────────────
+
+// GetPublicURL returns the public URL for a file in a public bucket.
+func (s *StorageClient) GetPublicURL(bucketName, filePath string) string {
+	return fmt.Sprintf("%s/api/v1/storage/projects/%s/files/%s/%s",
+		s.baseURL, s.projectSlug, bucketName, filePath)
+}
+
+// GetStats returns storage statistics for the project.
+func (s *StorageClient) GetStats() (*StorageQuota, error) {
+	path := fmt.Sprintf("/api/v1/storage/projects/%s/stats", s.projectSlug)
+	resp, err := s.doJSON("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var quota StorageQuota
+	if err := json.Unmarshal(resp, &quota); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &quota, nil
+}
+
+// GetQuota is a backward-compat alias for GetStats.
+func (s *StorageClient) GetQuota() (*StorageQuota, error) {
+	return s.GetStats()
+}
+
+// Close releases resources.
+func (s *StorageClient) Close() {
+	s.httpClient.CloseIdleConnections()
+}
+
+// ── Internals ───────────────────────────────────────────────────
+
+func (s *StorageClient) bucketsPath() string {
+	return fmt.Sprintf("/api/v1/storage/projects/%s/buckets", s.projectSlug)
+}
+
+func (s *StorageClient) doJSON(method, path string, body interface{}) ([]byte, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
@@ -254,8 +466,12 @@ func (s *StorageClient) doRequest(method, path string, body interface{}) ([]byte
 		bodyReader = bytes.NewReader(jsonBody)
 	}
 
-	url := s.projectURL + path
-	req, err := http.NewRequest(method, url, bodyReader)
+	reqURL := s.baseURL + path
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		reqURL = path
+	}
+
+	req, err := http.NewRequest(method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -282,157 +498,50 @@ func (s *StorageClient) doRequest(method, path string, body interface{}) ([]byte
 	return respBody, nil
 }
 
-// extractProjectSlug extracts the project slug from a project URL
-func (s *StorageClient) extractProjectSlug() string {
-	projectURL := strings.TrimSpace(s.projectURL)
-	
-	// If it's a full URL, extract the subdomain
-	if strings.HasPrefix(projectURL, "http://") || strings.HasPrefix(projectURL, "https://") {
-		parsedURL, err := url.Parse(projectURL)
+func buildStorageURLs(projectURL, baseDomain string, secure bool) (baseURL string, slug string) {
+	normalized := strings.TrimSpace(projectURL)
+
+	if strings.HasPrefix(normalized, "http://") || strings.HasPrefix(normalized, "https://") {
+		baseURL = strings.TrimSuffix(normalized, "/")
+		if strings.Contains(baseURL, "/api") {
+			baseURL = strings.Split(baseURL, "/api")[0]
+		}
+		parsed, err := url.Parse(baseURL)
 		if err == nil {
-			host := parsedURL.Host
-			// Remove port if present
-			if idx := strings.Index(host, ":"); idx != -1 {
-				host = host[:idx]
-			}
-			// Extract subdomain (project slug)
+			host := parsed.Hostname()
 			parts := strings.Split(host, ".")
 			if len(parts) > 0 {
-				return parts[0]
+				slug = parts[0]
 			}
 		}
+		return
 	}
-	
-	// If it contains a dot, it might be "project.wowsql.com" format
-	if strings.Contains(projectURL, ".") {
-		parts := strings.Split(projectURL, ".")
-		if len(parts) > 0 {
-			return parts[0]
-		}
+
+	protocol := "https"
+	if !secure {
+		protocol = "http"
 	}
-	
-	// Otherwise, assume it's already just the slug
-	return projectURL
+
+	if strings.Contains(normalized, "."+baseDomain) || strings.HasSuffix(normalized, baseDomain) {
+		baseURL = fmt.Sprintf("%s://%s", protocol, normalized)
+		slug = strings.Split(normalized, ".")[0]
+	} else {
+		baseURL = fmt.Sprintf("%s://%s.%s", protocol, normalized, baseDomain)
+		slug = normalized
+	}
+	return
 }
 
-// GetFileUrl gets a presigned URL with full metadata (similar to Python's get_file_url)
-func (s *StorageClient) GetFileUrl(key string, expiresIn int) (map[string]interface{}, error) {
-	projectSlug := s.extractProjectSlug()
-	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/files/%s/url?expires_in=%d", projectSlug, key, expiresIn)
-	resp, err := s.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetPresignedUrl generates a presigned URL for file operations
-func (s *StorageClient) GetPresignedUrl(key string, expiresIn int, operation string) (string, error) {
-	projectSlug := s.extractProjectSlug()
-	body := map[string]interface{}{
-		"file_key":   key,
-		"expires_in": expiresIn,
-		"operation":  operation,
-	}
-
-	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/presigned-url", projectSlug)
-	resp, err := s.doRequest("POST", path, body)
-	if err != nil {
-		return "", err
-	}
-
-	var result struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result.URL, nil
-}
-
-// GetStorageInfo gets S3 storage information for the project
-func (s *StorageClient) GetStorageInfo() (map[string]interface{}, error) {
-	projectSlug := s.extractProjectSlug()
-	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/info", projectSlug)
-	resp, err := s.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result, nil
-}
-
-// ProvisionStorage provisions S3 storage for the project
-// ⚠️ IMPORTANT: Save the credentials returned! They're only shown once.
-func (s *StorageClient) ProvisionStorage(region string) (map[string]interface{}, error) {
-	projectSlug := s.extractProjectSlug()
-	body := map[string]interface{}{
-		"region": region,
-	}
-
-	path := fmt.Sprintf("/api/v1/storage/s3/projects/%s/provision", projectSlug)
-	resp, err := s.doRequest("POST", path, body)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result, nil
-}
-
-// GetAvailableRegions gets list of available S3 regions with pricing
-func (s *StorageClient) GetAvailableRegions() ([]map[string]interface{}, error) {
-	resp, err := s.doRequest("GET", "/api/v1/storage/s3/regions", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result []map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result, nil
-}
-
-// UploadFromPath uploads a file from local filesystem path
-func (s *StorageClient) UploadFromPath(filePath string, key string, contentType string, checkQuota *bool) (*FileUploadResult, error) {
-	// Read file from path
-	fileData, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	return s.Upload(fileData, key, contentType, checkQuota)
-}
-
-// formatBytes formats bytes to human-readable string
-func formatBytes(bytes int64) string {
+// formatBytes formats bytes to human-readable string.
+func formatBytes(b int64) string {
 	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
 	}
 	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
+	for n := b / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%.2f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
-

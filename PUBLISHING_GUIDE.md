@@ -66,7 +66,7 @@ Create a simple test file first:
 
 ```bash
 # Create test file
-cat > WOWSQL/client_test.go << 'EOF'
+cat > wowsql/client_test.go << 'EOF'
 package WOWSQL
 
 import "testing"
@@ -93,7 +93,7 @@ go test ./...
 git add .
 
 # Commit
-git commit -m "release v1.4.0"
+git commit -m "release v1.5.0"
 
 # Push to GitHub
 git push origin 
@@ -103,8 +103,8 @@ git push origin
 
 ```bash
 # Create and push tag
-git tag v1.4.0
-git push origin v1.4.0
+git tag v1.5.0
+git push origin v1.5.0
 ```
 
 ### Step 5: Publish to pkg.go.dev
@@ -112,7 +112,7 @@ git push origin v1.4.0
 **Good news!** Go packages are automatically published to pkg.go.dev when you push a Git tag.
 
 1. Wait 10-15 minutes after pushing the tag
-2. Visit: https://pkg.go.dev/github.com/wowsql/wowsql-go/WOWSQL
+2. Visit: https://pkg.go.dev/github.com/wowsql/wowsql-go/wowsql
 3. If it doesn't appear, request indexing:
    ```bash
    # Trigger indexing by fetching the module
@@ -123,12 +123,12 @@ git push origin v1.4.0
 
 ```bash
 # Create a test project
-mkdir test-WOWSQL
-cd test-WOWSQL
+mkdir test-wowsql
+cd test-wowsql
 go mod init test
 
 # Install the package
-go get github.com/wowsql/wowsql-go/WOWSQL
+go get github.com/wowsql/wowsql-go/wowsql
 
 # Create a test file
 cat > main.go << 'EOF'
@@ -136,7 +136,7 @@ package main
 
 import (
     "fmt"
-    "github.com/wowsql/wowsql-go/WOWSQL"
+    "github.com/wowsql/wowsql-go/wowsql"
 )
 
 func main() {
@@ -192,7 +192,7 @@ git push origin $VERSION
 echo "📚 Triggering pkg.go.dev indexing..."
 GOPROXY=proxy.golang.org go list -m github.com/wowsql/wowsql-go@$VERSION
 
-echo "✅ Done! Visit https://pkg.go.dev/github.com/wowsql/wowsql-go/WOWSQL"
+echo "✅ Done! Visit https://pkg.go.dev/github.com/wowsql/wowsql-go/wowsql"
 ```
 
 **Windows (`publish.bat`):**
@@ -227,7 +227,7 @@ echo Triggering pkg.go.dev indexing...
 set GOPROXY=proxy.golang.org
 go list -m github.com/wowsql/wowsql-go@%VERSION%
 
-echo Done! Visit https://pkg.go.dev/github.com/wowsql/wowsql-go/WOWSQL
+echo Done! Visit https://pkg.go.dev/github.com/wowsql/wowsql-go/wowsql
 pause
 ```
 
@@ -269,12 +269,12 @@ GOPROXY=proxy.golang.org go list -m github.com/wowsql/wowsql-go@v1.0.0
 ### 1. Verify Installation
 
 ```bash
-go get github.com/wowsql/wowsql-go/WOWSQL@v1.0.0
+go get github.com/wowsql/wowsql-go/wowsql@v1.0.0
 ```
 
 ### 2. Check pkg.go.dev
 
-Visit: https://pkg.go.dev/github.com/wowsql/wowsql-go/WOWSQL
+Visit: https://pkg.go.dev/github.com/wowsql/wowsql-go/wowsql
 
 ### 3. Create GitHub Release
 
@@ -295,7 +295,7 @@ Update the main WOWSQL repository to reference the new SDK:
 - [TypeScript/JavaScript](https://www.npmjs.com/package/@wowsql/sdk)
 - [Flutter/Dart](https://pub.dev/packages/WOWSQL)
 - [Kotlin](https://search.maven.org/artifact/com.WOWSQL/WOWSQL-sdk)
-- [Go](https://pkg.go.dev/github.com/wowsql/wowsql-go/WOWSQL) ⬅️ NEW!
+- [Go](https://pkg.go.dev/github.com/wowsql/wowsql-go/wowsql) ⬅️ NEW!
 ```
 
 ### 5. Announce Release
