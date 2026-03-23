@@ -93,7 +93,7 @@ go test ./...
 git add .
 
 # Commit
-git commit -m "release v1.5.0"
+git commit -m "release v2.0.0"
 
 # Push to GitHub
 git push origin 
@@ -103,8 +103,8 @@ git push origin
 
 ```bash
 # Create and push tag
-git tag v1.5.0
-git push origin v1.5.0
+git tag v2.0.0
+git push origin v2.0.0
 ```
 
 ### Step 5: Publish to pkg.go.dev
@@ -246,7 +246,7 @@ chmod +x publish.sh
 
 **Solution**: Make sure you've pushed the Git tag to GitHub:
 ```bash
-git push origin v1.0.0
+git push origin v2.0.0
 ```
 
 ### Error: "package not showing on pkg.go.dev"

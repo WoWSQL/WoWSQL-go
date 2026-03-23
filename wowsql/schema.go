@@ -88,24 +88,47 @@ func NewSchemaClient(projectURL, serviceKey string, opts ...SchemaClientOption) 
 // ── Table operations ────────────────────────────────────────────
 
 // CreateTable creates a new table.
+// TablePrimaryKey is required; that column must use PostgreSQL type UUID.
 func (s *SchemaClient) CreateTable(tableName string, columns []ColumnDefinition, opts ...CreateTableOption) (map[string]interface{}, error) {
 	cfg := &createTableConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
+	if cfg.primaryKey == "" {
+		return nil, fmt.Errorf("wowsql: TablePrimaryKey is required; primary key column must be UUID")
+	}
+	if err := validateUUIDPrimaryKey(cfg.primaryKey, columns); err != nil {
+		return nil, err
+	}
 
 	body := map[string]interface{}{
-		"table_name": tableName,
-		"columns":    columns,
-	}
-	if cfg.primaryKey != "" {
-		body["primary_key"] = cfg.primaryKey
+		"table_name":  tableName,
+		"columns":     columns,
+		"primary_key": cfg.primaryKey,
 	}
 	if len(cfg.indexes) > 0 {
 		body["indexes"] = cfg.indexes
 	}
 
 	return s.doRequest("POST", "/api/v2/schema/tables", body)
+}
+
+func validateUUIDPrimaryKey(pk string, columns []ColumnDefinition) error {
+	for _, c := range columns {
+		if c.Name != pk {
+			continue
+		}
+		t := strings.TrimSpace(c.Type)
+		if t == "" {
+			return fmt.Errorf("wowsql: primary key column must have type UUID")
+		}
+		first := strings.ToUpper(strings.Fields(t)[0])
+		if first == "UUID" {
+			return nil
+		}
+		return fmt.Errorf("wowsql: primary key column must have type UUID, got %q", c.Type)
+	}
+	return fmt.Errorf("wowsql: primary key column %q not found in columns", pk)
 }
 
 // CreateTableOption configures a CreateTable call.
