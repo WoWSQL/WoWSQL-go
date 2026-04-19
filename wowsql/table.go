@@ -5,191 +5,14 @@ import (
 	"fmt"
 )
 
-// Table represents a database table with fluent API.
+// Table represents a database table with a fluent query API.
+// All operations communicate directly with PostgREST (/rest/v1).
 type Table struct {
 	client    *Client
 	tableName string
 }
 
-// ── Query builders ──────────────────────────────────────────────
-
-// Select creates a new QueryBuilder with column selection.
-func (t *Table) Select(columns ...string) *QueryBuilder {
-	return (&QueryBuilder{
-		client:    t.client,
-		tableName: t.tableName,
-		filters:   make([]FilterExpression, 0),
-	}).Select(columns...)
-}
-
-// Filter starts a query with a filter.
-func (t *Table) Filter(column string, operator FilterOperator, value interface{}, logicalOp ...string) *QueryBuilder {
-	return (&QueryBuilder{
-		client:    t.client,
-		tableName: t.tableName,
-		filters:   make([]FilterExpression, 0),
-	}).Filter(column, operator, value, logicalOp...)
-}
-
-// Get retrieves all records (shorthand for Select("*").Get()).
-func (t *Table) Get() (*QueryResponse, error) {
-	return t.Select("*").Get()
-}
-
-// GetByID retrieves a single record by ID.
-func (t *Table) GetByID(id interface{}) (map[string]interface{}, error) {
-	resp, err := t.client.doRequest("GET", fmt.Sprintf("/%s/%v", t.tableName, id), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return result, nil
-}
-
-// ── Write operations ────────────────────────────────────────────
-
-// Create inserts a new record.
-func (t *Table) Create(data map[string]interface{}) (*CreateResponse, error) {
-	resp, err := t.client.doRequest("POST", fmt.Sprintf("/%s", t.tableName), data)
-	if err != nil {
-		return nil, err
-	}
-
-	var result CreateResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &result, nil
-}
-
-// Insert is an alias for Create.
-func (t *Table) Insert(data map[string]interface{}) (*CreateResponse, error) {
-	return t.Create(data)
-}
-
-// BulkInsert inserts multiple records. Attempts a single batch POST first;
-// falls back to individual inserts if the server does not support batch creation.
-func (t *Table) BulkInsert(records []map[string]interface{}) ([]*CreateResponse, error) {
-	if len(records) == 0 {
-		return []*CreateResponse{}, nil
-	}
-
-	resp, err := t.client.doRequest("POST", fmt.Sprintf("/%s", t.tableName), records)
-	if err == nil {
-		// Try to parse as array
-		var results []*CreateResponse
-		if json.Unmarshal(resp, &results) == nil {
-			return results, nil
-		}
-		// Try single result
-		var single CreateResponse
-		if json.Unmarshal(resp, &single) == nil {
-			return []*CreateResponse{&single}, nil
-		}
-	}
-
-	// Fallback to individual inserts
-	results := make([]*CreateResponse, 0, len(records))
-	for _, record := range records {
-		r, insertErr := t.Create(record)
-		if insertErr != nil {
-			return results, insertErr
-		}
-		results = append(results, r)
-	}
-	return results, nil
-}
-
-// Upsert inserts or updates based on a conflict column.
-func (t *Table) Upsert(data map[string]interface{}, onConflict string) (map[string]interface{}, error) {
-	if onConflict == "" {
-		onConflict = "id"
-	}
-
-	conflictValue, ok := data[onConflict]
-	if !ok || conflictValue == nil {
-		resp, err := t.Create(data)
-		if err != nil {
-			return nil, err
-		}
-		b, _ := json.Marshal(resp)
-		var m map[string]interface{}
-		_ = json.Unmarshal(b, &m)
-		return m, nil
-	}
-
-	existing, err := (&QueryBuilder{
-		client:    t.client,
-		tableName: t.tableName,
-		filters:   make([]FilterExpression, 0),
-	}).Eq(onConflict, conflictValue).First()
-	if err != nil {
-		return nil, err
-	}
-
-	if existing != nil {
-		updateData := make(map[string]interface{})
-		for k, v := range data {
-			if k != onConflict {
-				updateData[k] = v
-			}
-		}
-		if len(updateData) == 0 {
-			return map[string]interface{}{"message": "No changes", "affected_rows": 0}, nil
-		}
-		resp, err := t.Update(conflictValue, updateData)
-		if err != nil {
-			return nil, err
-		}
-		b, _ := json.Marshal(resp)
-		var m map[string]interface{}
-		_ = json.Unmarshal(b, &m)
-		return m, nil
-	}
-
-	resp, err := t.Create(data)
-	if err != nil {
-		return nil, err
-	}
-	b, _ := json.Marshal(resp)
-	var m map[string]interface{}
-	_ = json.Unmarshal(b, &m)
-	return m, nil
-}
-
-// Update updates a record by ID.
-func (t *Table) Update(recordID interface{}, data map[string]interface{}) (*UpdateResponse, error) {
-	resp, err := t.client.doRequest("PATCH", fmt.Sprintf("/%s/%v", t.tableName, recordID), data)
-	if err != nil {
-		return nil, err
-	}
-
-	var result UpdateResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &result, nil
-}
-
-// Delete deletes a record by ID.
-func (t *Table) Delete(recordID interface{}) (*DeleteResponse, error) {
-	resp, err := t.client.doRequest("DELETE", fmt.Sprintf("/%s/%v", t.tableName, recordID), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result DeleteResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &result, nil
-}
-
-// ── Convenience shortcuts ───────────────────────────────────────
+// ── Query chain entry points ─────────────────────────────────────────────────
 
 func (t *Table) newBuilder() *QueryBuilder {
 	return &QueryBuilder{
@@ -197,6 +20,21 @@ func (t *Table) newBuilder() *QueryBuilder {
 		tableName: t.tableName,
 		filters:   make([]FilterExpression, 0),
 	}
+}
+
+// Select creates a QueryBuilder with column selection.
+func (t *Table) Select(columns ...string) *QueryBuilder {
+	return t.newBuilder().Select(columns...)
+}
+
+// Filter starts a query with a filter.
+func (t *Table) Filter(column string, operator FilterOperator, value interface{}, logicalOp ...string) *QueryBuilder {
+	return t.newBuilder().Filter(column, operator, value, logicalOp...)
+}
+
+// Get retrieves all records.
+func (t *Table) Get() (*QueryResponse, error) {
+	return t.newBuilder().Get()
 }
 
 // Eq starts a query filtering where column equals value.
@@ -239,12 +77,125 @@ func (t *Table) Count() (int, error) {
 	return t.newBuilder().Count()
 }
 
-// Paginate paginates all records in this table.
+// Paginate paginates all records.
 func (t *Table) Paginate(page, perPage int) (*PaginatedResponse, error) {
 	return t.newBuilder().Paginate(page, perPage)
 }
 
-// Where creates a new QueryBuilder for filtered operations (legacy helper).
-func (t *Table) Where() *QueryBuilder {
-	return t.newBuilder()
+// ── Single-record CRUD ───────────────────────────────────────────────────────
+
+// GetByID retrieves a single record by primary-key value using PostgREST id=eq.{id}.
+func (t *Table) GetByID(id interface{}) (map[string]interface{}, error) {
+	path := fmt.Sprintf("/%s?id=eq.%v", t.tableName, id)
+	body, _, err := t.client.doRequestWithHeaders("GET", path, nil,
+		map[string]string{"Accept": "application/vnd.pgrst.object+json"})
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return result, nil
+}
+
+// Create inserts a new record and returns the created row.
+func (t *Table) Create(data map[string]interface{}) (*CreateResponse, error) {
+	body, _, err := t.client.doRequestWithHeaders("POST", "/"+t.tableName, data,
+		map[string]string{"Prefer": "return=representation"})
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(body, &rows); err != nil || len(rows) == 0 {
+		var single map[string]interface{}
+		if err2 := json.Unmarshal(body, &single); err2 != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
+		return &CreateResponse{ID: single["id"], Message: "Record created successfully"}, nil
+	}
+	return &CreateResponse{ID: rows[0]["id"], Message: "Record created successfully"}, nil
+}
+
+// Insert is an alias for Create.
+func (t *Table) Insert(data map[string]interface{}) (*CreateResponse, error) {
+	return t.Create(data)
+}
+
+// BulkInsert inserts multiple records in a single request.
+func (t *Table) BulkInsert(records []map[string]interface{}) ([]*CreateResponse, error) {
+	if len(records) == 0 {
+		return []*CreateResponse{}, nil
+	}
+	body, _, err := t.client.doRequestWithHeaders("POST", "/"+t.tableName, records,
+		map[string]string{"Prefer": "return=representation"})
+	if err != nil {
+		return nil, err
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	results := make([]*CreateResponse, len(rows))
+	for i, row := range rows {
+		results[i] = &CreateResponse{ID: row["id"], Message: "Record created successfully"}
+	}
+	return results, nil
+}
+
+// Upsert inserts or updates based on a conflict column using PostgREST merge-duplicates.
+func (t *Table) Upsert(data map[string]interface{}, onConflict string) (*CreateResponse, error) {
+	if onConflict == "" {
+		onConflict = "id"
+	}
+	body, _, err := t.client.doRequestWithHeaders("POST", "/"+t.tableName, data,
+		map[string]string{
+			"Prefer":      "return=representation,resolution=merge-duplicates",
+			"on-conflict": onConflict,
+		})
+	if err != nil {
+		return nil, err
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(body, &rows); err != nil || len(rows) == 0 {
+		var single map[string]interface{}
+		if err2 := json.Unmarshal(body, &single); err2 != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
+		return &CreateResponse{ID: single["id"], Message: "Record upserted successfully"}, nil
+	}
+	return &CreateResponse{ID: rows[0]["id"], Message: "Record upserted successfully"}, nil
+}
+
+// Update updates a record by primary-key value using PostgREST id=eq.{id}.
+func (t *Table) Update(recordID interface{}, data map[string]interface{}) (*UpdateResponse, error) {
+	path := fmt.Sprintf("/%s?id=eq.%v", t.tableName, recordID)
+	body, _, err := t.client.doRequestWithHeaders("PATCH", path, data,
+		map[string]string{"Prefer": "return=representation"})
+	if err != nil {
+		return nil, err
+	}
+	var rows []map[string]interface{}
+	_ = json.Unmarshal(body, &rows)
+	return &UpdateResponse{
+		Message:      "Record updated successfully",
+		AffectedRows: len(rows),
+	}, nil
+}
+
+// Delete deletes a record by primary-key value using PostgREST id=eq.{id}.
+func (t *Table) Delete(recordID interface{}) (*DeleteResponse, error) {
+	path := fmt.Sprintf("/%s?id=eq.%v", t.tableName, recordID)
+	body, _, err := t.client.doRequestWithHeaders("DELETE", path, nil,
+		map[string]string{"Prefer": "return=representation"})
+	if err != nil {
+		return nil, err
+	}
+	var rows []map[string]interface{}
+	_ = json.Unmarshal(body, &rows)
+	return &DeleteResponse{
+		Message:      "Record deleted successfully",
+		AffectedRows: len(rows),
+	}, nil
 }

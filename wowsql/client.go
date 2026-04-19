@@ -21,7 +21,7 @@ type clientConfig struct {
 	verifySSL  bool
 }
 
-// WithBaseDomain sets the base domain (default: "wowsql.com").
+// WithBaseDomain sets the base domain (default: "wowsqlconnect.com").
 func WithBaseDomain(domain string) ClientOption {
 	return func(c *clientConfig) { c.baseDomain = domain }
 }
@@ -41,7 +41,8 @@ func WithVerifySSL(verify bool) ClientOption {
 	return func(c *clientConfig) { c.verifySSL = verify }
 }
 
-// Client represents the WOWSQL database client.
+// Client represents the WowSQL database client.
+// All operations communicate directly with PostgREST (/rest/v1).
 type Client struct {
 	baseURL    string
 	apiURL     string
@@ -50,13 +51,14 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a new WOWSQL client.
+// NewClient creates a new WowSQL client.
 //
-// projectURL can be a slug ("myproject"), a domain ("myproject.wowsql.com"),
-// or a full URL ("https://myproject.wowsql.com" or "https://myproject.wowsql.com/api").
+// projectURL can be a slug ("myproject"), a domain ("myproject.wowsqlconnect.com"),
+// or a full URL ("https://myproject.wowsqlconnect.com").
+// All requests are sent directly to the PostgREST endpoint (/rest/v1).
 func NewClient(projectURL, apiKey string, opts ...ClientOption) *Client {
 	cfg := &clientConfig{
-		baseDomain: "wowsql.com",
+		baseDomain: "wowsqlconnect.com",
 		secure:     true,
 		timeout:    30 * time.Second,
 		verifySSL:  true,
@@ -65,7 +67,8 @@ func NewClient(projectURL, apiKey string, opts ...ClientOption) *Client {
 		o(cfg)
 	}
 
-	baseURL, apiURL := buildClientURLs(projectURL, cfg.baseDomain, cfg.secure)
+	baseURL := buildBaseURL(projectURL, cfg.baseDomain, cfg.secure)
+	apiURL := baseURL + "/rest/v1"
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if !cfg.verifySSL {
@@ -98,134 +101,113 @@ func (c *Client) Schema() *SchemaClient {
 	return NewSchemaClient(c.baseURL, c.apiKey)
 }
 
-// ListTables lists all tables in the database.
-func (c *Client) ListTables() ([]string, error) {
-	resp, err := c.doRequest("GET", "/tables", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Tables []string `json:"tables"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result.Tables, nil
-}
-
-// GetTableSchema gets the schema information for a table.
-func (c *Client) GetTableSchema(tableName string) (*TableSchema, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/tables/%s/schema", tableName), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var schema TableSchema
-	if err := json.Unmarshal(resp, &schema); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return &schema, nil
-}
-
-// Query executes a raw SQL query (read-only).
-func (c *Client) Query(sql string) ([]map[string]interface{}, error) {
-	body := map[string]interface{}{
-		"sql": sql,
-	}
-
-	resp, err := c.doRequestRaw("POST", c.baseURL+"/api/v1/query", body)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Data []map[string]interface{} `json:"data"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result.Data, nil
-}
-
-// Health checks the API health.
-func (c *Client) Health() (map[string]interface{}, error) {
-	resp, err := c.doRequestRaw("GET", c.baseURL+"/api/v1/health", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return result, nil
-}
-
 // Close releases resources held by the client.
 func (c *Client) Close() {
 	c.httpClient.CloseIdleConnections()
 }
 
-// doRequest performs an HTTP request using the v2 API URL.
-func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error) {
+// doRequest performs an HTTP request using the PostgREST API URL.
+func (c *Client) doRequest(method, path string, body interface{}) ([]byte, *http.Response, error) {
 	url := c.apiURL + path
 	return c.doRequestRaw(method, url, body)
 }
 
-// doRequestRaw performs an HTTP request to an absolute URL.
-func (c *Client) doRequestRaw(method, url string, body interface{}) ([]byte, error) {
+// doRequestRaw performs an HTTP request to an absolute URL and returns body + response.
+func (c *Client) doRequestRaw(method, url string, body interface{}) ([]byte, *http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+			return nil, nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(jsonBody)
 	}
 
 	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("apikey", c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &NetworkError{Err: err}
+		return nil, nil, &NetworkError{Err: err}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, resp, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, parseError(resp.StatusCode, respBody)
+		return nil, resp, parseError(resp.StatusCode, respBody)
 	}
 
-	return respBody, nil
+	return respBody, resp, nil
 }
 
-// buildClientURLs builds the base URL and v2 API URL from various input formats.
-func buildClientURLs(projectURL, baseDomain string, secure bool) (baseURL, apiURL string) {
+// doRequestSimple performs a request and returns only the body bytes.
+func (c *Client) doRequestSimple(method, path string, body interface{}) ([]byte, error) {
+	b, _, err := c.doRequest(method, path, body)
+	return b, err
+}
+
+// doRequestWithHeaders performs a request with custom headers and returns body + response.
+func (c *Client) doRequestWithHeaders(method, path string, body interface{}, headers map[string]string) ([]byte, *http.Response, error) {
+	url := c.apiURL + path
+	var bodyReader io.Reader
+	if body != nil {
+		jsonBody, err := json.Marshal(body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(jsonBody)
+	}
+
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("apikey", c.apiKey)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, &NetworkError{Err: err}
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, resp, parseError(resp.StatusCode, respBody)
+	}
+
+	return respBody, resp, nil
+}
+
+// buildBaseURL builds the base URL (without API path) from various input formats.
+func buildBaseURL(projectURL, baseDomain string, secure bool) string {
 	normalized := strings.TrimSpace(projectURL)
 
 	if strings.HasPrefix(normalized, "http://") || strings.HasPrefix(normalized, "https://") {
-		baseURL = strings.TrimSuffix(normalized, "/")
-		if strings.Contains(baseURL, "/api") {
-			baseURL = strings.Split(baseURL, "/api")[0]
+		base := strings.TrimSuffix(normalized, "/")
+		if strings.Contains(base, "/api") {
+			base = strings.Split(base, "/api")[0]
 		}
-		apiURL = baseURL + "/api/v2"
-		return
+		return base
 	}
 
 	protocol := "https"
@@ -234,11 +216,7 @@ func buildClientURLs(projectURL, baseDomain string, secure bool) (baseURL, apiUR
 	}
 
 	if strings.Contains(normalized, "."+baseDomain) || strings.HasSuffix(normalized, baseDomain) {
-		baseURL = fmt.Sprintf("%s://%s", protocol, normalized)
-	} else {
-		baseURL = fmt.Sprintf("%s://%s.%s", protocol, normalized, baseDomain)
+		return fmt.Sprintf("%s://%s", protocol, normalized)
 	}
-
-	apiURL = baseURL + "/api/v2"
-	return
+	return fmt.Sprintf("%s://%s.%s", protocol, normalized, baseDomain)
 }

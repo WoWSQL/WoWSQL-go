@@ -168,7 +168,7 @@ type AuthClient struct {
 // apiKey should be the unified API key (anon or service).
 func NewAuthClient(projectURL, apiKey string, opts ...AuthClientOption) *AuthClient {
 	cfg := &authClientConfig{
-		baseDomain:   "wowsql.com",
+		baseDomain:   "wowsqlconnect.com",
 		secure:       true,
 		timeout:      30 * time.Second,
 		verifySSL:    true,
@@ -629,7 +629,7 @@ func (c *AuthClient) doRequest(method, path string, body interface{}, headers ma
 
 func buildAuthBaseURL(projectURL, baseDomain string, secure bool) string {
 	if baseDomain == "" {
-		baseDomain = "wowsql.com"
+		baseDomain = "wowsqlconnect.com"
 	}
 
 	normalized := strings.TrimSpace(projectURL)

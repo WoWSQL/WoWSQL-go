@@ -59,7 +59,7 @@ type SchemaClient struct {
 // serviceKey must be a service role key (wowsql_service_...).
 func NewSchemaClient(projectURL, serviceKey string, opts ...SchemaClientOption) *SchemaClient {
 	cfg := &schemaClientConfig{
-		baseDomain: "wowsql.com",
+		baseDomain: "wowsqlconnect.com",
 		secure:     true,
 		timeout:    30 * time.Second,
 		verifySSL:  true,

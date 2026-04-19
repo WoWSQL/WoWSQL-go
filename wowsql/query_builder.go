@@ -3,6 +3,7 @@ package WOWSQL
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -17,6 +18,7 @@ const (
 	OpLt         FilterOperator = "lt"
 	OpLte        FilterOperator = "lte"
 	OpLike       FilterOperator = "like"
+	OpILike      FilterOperator = "ilike"
 	OpIsNull     FilterOperator = "is"
 	OpIsNotNull  FilterOperator = "is_not"
 	OpIn         FilterOperator = "in"
@@ -38,10 +40,16 @@ type FilterExpression struct {
 	Column    string         `json:"column"`
 	Operator  FilterOperator `json:"operator"`
 	Value     interface{}    `json:"value,omitempty"`
-	LogicalOp string        `json:"logical_op,omitempty"`
+	LogicalOp string         `json:"logical_op,omitempty"`
 }
 
-// QueryBuilder provides a fluent interface for building queries.
+// orderItem holds a single column order specification.
+type orderItem struct {
+	column    string
+	direction SortDirection
+}
+
+// QueryBuilder provides a fluent interface for building PostgREST queries.
 type QueryBuilder struct {
 	client         *Client
 	tableName      string
@@ -49,10 +57,79 @@ type QueryBuilder struct {
 	filters        []FilterExpression
 	groupByColumns []string
 	havingFilters  []HavingFilter
-	orderColumn    string
-	orderDirection SortDirection
+	orderItems     []orderItem
 	limitValue     *int
 	offsetValue    *int
+}
+
+// filtersToParams translates FilterExpression slice to PostgREST query parameters.
+func filtersToParams(filters []FilterExpression) url.Values {
+	params := url.Values{}
+	for _, f := range filters {
+		col := f.Column
+		op := f.Operator
+		val := f.Value
+
+		switch op {
+		case OpEq:
+			params.Set(col, fmt.Sprintf("eq.%v", val))
+		case OpNeq:
+			params.Set(col, fmt.Sprintf("neq.%v", val))
+		case OpGt:
+			params.Set(col, fmt.Sprintf("gt.%v", val))
+		case OpGte:
+			params.Set(col, fmt.Sprintf("gte.%v", val))
+		case OpLt:
+			params.Set(col, fmt.Sprintf("lt.%v", val))
+		case OpLte:
+			params.Set(col, fmt.Sprintf("lte.%v", val))
+		case OpLike:
+			pattern := strings.ReplaceAll(fmt.Sprintf("%v", val), "%", "*")
+			params.Set(col, "like."+pattern)
+		case OpILike:
+			pattern := strings.ReplaceAll(fmt.Sprintf("%v", val), "%", "*")
+			params.Set(col, "ilike."+pattern)
+		case OpIsNull:
+			if val == nil {
+				params.Set(col, "is.null")
+			} else {
+				params.Set(col, fmt.Sprintf("is.%v", val))
+			}
+		case OpIsNotNull:
+			if val == nil {
+				params.Set(col, "not.is.null")
+			} else {
+				params.Set(col, fmt.Sprintf("not.is.%v", val))
+			}
+		case OpIn:
+			if vals, ok := val.([]interface{}); ok {
+				parts := make([]string, len(vals))
+				for i, v := range vals {
+					parts[i] = fmt.Sprintf("%v", v)
+				}
+				params.Set(col, "in.("+strings.Join(parts, ",")+")")
+			}
+		case OpNotIn:
+			if vals, ok := val.([]interface{}); ok {
+				parts := make([]string, len(vals))
+				for i, v := range vals {
+					parts[i] = fmt.Sprintf("%v", v)
+				}
+				params.Set(col, "not.in.("+strings.Join(parts, ",")+")")
+			}
+		case OpBetween:
+			if vals, ok := val.([]interface{}); ok && len(vals) == 2 {
+				params.Set(col, fmt.Sprintf("gte.%v", vals[0]))
+				params.Set(col+"_lte", fmt.Sprintf("lte.%v", vals[1]))
+			}
+		case OpNotBetween:
+			if vals, ok := val.([]interface{}); ok && len(vals) == 2 {
+				params.Set(col+"_lt", fmt.Sprintf("lt.%v", vals[0]))
+				params.Set(col+"_gt", fmt.Sprintf("gt.%v", vals[1]))
+			}
+		}
+	}
+	return params
 }
 
 // Select specifies columns to select.
@@ -76,83 +153,71 @@ func (qb *QueryBuilder) Filter(column string, operator FilterOperator, value int
 	return qb
 }
 
-// Eq adds an equality filter.
 func (qb *QueryBuilder) Eq(column string, value interface{}) *QueryBuilder {
 	return qb.Filter(column, OpEq, value)
 }
 
-// Neq adds a not-equal filter.
 func (qb *QueryBuilder) Neq(column string, value interface{}) *QueryBuilder {
 	return qb.Filter(column, OpNeq, value)
 }
 
-// Gt adds a greater-than filter.
 func (qb *QueryBuilder) Gt(column string, value interface{}) *QueryBuilder {
 	return qb.Filter(column, OpGt, value)
 }
 
-// Gte adds a greater-than-or-equal filter.
 func (qb *QueryBuilder) Gte(column string, value interface{}) *QueryBuilder {
 	return qb.Filter(column, OpGte, value)
 }
 
-// Lt adds a less-than filter.
 func (qb *QueryBuilder) Lt(column string, value interface{}) *QueryBuilder {
 	return qb.Filter(column, OpLt, value)
 }
 
-// Lte adds a less-than-or-equal filter.
 func (qb *QueryBuilder) Lte(column string, value interface{}) *QueryBuilder {
 	return qb.Filter(column, OpLte, value)
 }
 
-// Like adds a LIKE pattern filter.
 func (qb *QueryBuilder) Like(column string, pattern string) *QueryBuilder {
 	return qb.Filter(column, OpLike, pattern)
 }
 
-// IsNull adds an IS NULL filter.
+func (qb *QueryBuilder) ILike(column string, pattern string) *QueryBuilder {
+	return qb.Filter(column, OpILike, pattern)
+}
+
 func (qb *QueryBuilder) IsNull(column string) *QueryBuilder {
 	return qb.Filter(column, OpIsNull, nil)
 }
 
-// IsNotNull adds an IS NOT NULL filter.
 func (qb *QueryBuilder) IsNotNull(column string) *QueryBuilder {
 	return qb.Filter(column, OpIsNotNull, nil)
 }
 
-// In adds an IN filter.
 func (qb *QueryBuilder) In(column string, values []interface{}) *QueryBuilder {
 	return qb.Filter(column, OpIn, values)
 }
 
-// NotIn adds a NOT IN filter.
 func (qb *QueryBuilder) NotIn(column string, values []interface{}) *QueryBuilder {
 	return qb.Filter(column, OpNotIn, values)
 }
 
-// Between adds a BETWEEN filter.
 func (qb *QueryBuilder) Between(column string, minValue, maxValue interface{}) *QueryBuilder {
 	return qb.Filter(column, OpBetween, []interface{}{minValue, maxValue})
 }
 
-// NotBetween adds a NOT BETWEEN filter.
 func (qb *QueryBuilder) NotBetween(column string, minValue, maxValue interface{}) *QueryBuilder {
 	return qb.Filter(column, OpNotBetween, []interface{}{minValue, maxValue})
 }
 
-// Or adds an OR filter condition.
 func (qb *QueryBuilder) Or(column string, operator FilterOperator, value interface{}) *QueryBuilder {
 	return qb.Filter(column, operator, value, "OR")
 }
 
-// GroupBy sets columns to group by.
 func (qb *QueryBuilder) GroupBy(columns ...string) *QueryBuilder {
 	qb.groupByColumns = columns
 	return qb
 }
 
-// Having adds a HAVING clause filter.
 func (qb *QueryBuilder) Having(column string, operator string, value interface{}) *QueryBuilder {
 	qb.havingFilters = append(qb.havingFilters, HavingFilter{
 		Column:   column,
@@ -162,10 +227,9 @@ func (qb *QueryBuilder) Having(column string, operator string, value interface{}
 	return qb
 }
 
-// OrderBy sets the order column and direction.
+// OrderBy sets a column to order by.
 func (qb *QueryBuilder) OrderBy(column string, direction SortDirection) *QueryBuilder {
-	qb.orderColumn = column
-	qb.orderDirection = direction
+	qb.orderItems = append(qb.orderItems, orderItem{column: column, direction: direction})
 	return qb
 }
 
@@ -174,38 +238,112 @@ func (qb *QueryBuilder) Order(column string, direction SortDirection) *QueryBuil
 	return qb.OrderBy(column, direction)
 }
 
-// Limit sets the maximum number of results.
 func (qb *QueryBuilder) Limit(limit int) *QueryBuilder {
 	qb.limitValue = &limit
 	return qb
 }
 
-// Offset sets the number of records to skip.
 func (qb *QueryBuilder) Offset(offset int) *QueryBuilder {
 	qb.offsetValue = &offset
 	return qb
 }
 
-// Execute executes the query and returns results.
-// Uses POST /{table}/query for advanced queries, GET /{table} for simple ones.
+// Execute runs the query against PostgREST using native query parameters.
 func (qb *QueryBuilder) Execute() (*QueryResponse, error) {
-	body := qb.buildQueryBody()
-
-	if qb.hasAdvancedFeatures(body) {
-		return qb.executePost(body)
-	}
-	return qb.executeGet(body)
+	return qb.Get()
 }
 
-// Get is an alias for Execute.
+// Get runs the query and returns matching records.
 func (qb *QueryBuilder) Get() (*QueryResponse, error) {
-	return qb.Execute()
+	params := filtersToParams(qb.filters)
+
+	// SELECT
+	if len(qb.columns) > 0 {
+		sel := strings.Join(qb.columns, ",")
+		// Merge group-by columns into select
+		if len(qb.groupByColumns) > 0 {
+			existing := strings.Split(sel, ",")
+			merged := make([]string, 0, len(existing)+len(qb.groupByColumns))
+			seen := map[string]bool{}
+			for _, c := range existing {
+				seen[c] = true
+				merged = append(merged, c)
+			}
+			for _, c := range qb.groupByColumns {
+				if !seen[c] {
+					merged = append(merged, c)
+				}
+			}
+			sel = strings.Join(merged, ",")
+		}
+		params.Set("select", sel)
+	} else if len(qb.groupByColumns) > 0 {
+		params.Set("select", strings.Join(qb.groupByColumns, ","))
+	}
+
+	// ORDER — PostgREST: ?order=col.asc,col2.desc
+	if len(qb.orderItems) > 0 {
+		parts := make([]string, len(qb.orderItems))
+		for i, o := range qb.orderItems {
+			dir := o.direction
+			if dir == "" {
+				dir = SortAsc
+			}
+			parts[i] = fmt.Sprintf("%s.%s", o.column, dir)
+		}
+		params.Set("order", strings.Join(parts, ","))
+	}
+
+	// LIMIT / OFFSET
+	if qb.limitValue != nil {
+		params.Set("limit", fmt.Sprintf("%d", *qb.limitValue))
+	}
+	if qb.offsetValue != nil {
+		params.Set("offset", fmt.Sprintf("%d", *qb.offsetValue))
+	}
+
+	path := fmt.Sprintf("/%s", qb.tableName)
+	if len(params) > 0 {
+		path += "?" + params.Encode()
+	}
+
+	body, resp, err := qb.client.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var rawData []map[string]interface{}
+	if err := json.Unmarshal(body, &rawData); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	total := len(rawData)
+	if resp != nil {
+		total = parseTotalFromContentRange(resp.Header.Get("Content-Range"), total)
+	}
+
+	limit := 100
+	offset := 0
+	if qb.limitValue != nil {
+		limit = *qb.limitValue
+	}
+	if qb.offsetValue != nil {
+		offset = *qb.offsetValue
+	}
+
+	return &QueryResponse{
+		Data:   rawData,
+		Count:  len(rawData),
+		Total:  &total,
+		Limit:  limit,
+		Offset: offset,
+	}, nil
 }
 
-// First retrieves only the first result.
+// First retrieves the first matching record.
 func (qb *QueryBuilder) First() (map[string]interface{}, error) {
 	qb.Limit(1)
-	result, err := qb.Execute()
+	result, err := qb.Get()
 	if err != nil {
 		return nil, err
 	}
@@ -215,11 +353,10 @@ func (qb *QueryBuilder) First() (map[string]interface{}, error) {
 	return result.Data[0], nil
 }
 
-// Single retrieves exactly one result. Returns an error if zero or more than
-// one record is found.
+// Single retrieves exactly one record. Returns an error if zero or more than one found.
 func (qb *QueryBuilder) Single() (map[string]interface{}, error) {
 	qb.Limit(2)
-	result, err := qb.Execute()
+	result, err := qb.Get()
 	if err != nil {
 		return nil, err
 	}
@@ -234,38 +371,82 @@ func (qb *QueryBuilder) Single() (map[string]interface{}, error) {
 
 // Count returns the total number of records matching the current filters.
 func (qb *QueryBuilder) Count() (int, error) {
-	savedColumns := qb.columns
-	savedGroupBy := qb.groupByColumns
-	savedHaving := qb.havingFilters
-	savedOrder := qb.orderColumn
-	savedDir := qb.orderDirection
+	savedCols := qb.columns
+	savedLimit := qb.limitValue
+	savedOffset := qb.offsetValue
+	savedOrder := qb.orderItems
 
-	qb.columns = []string{"COUNT(*) as count"}
-	qb.groupByColumns = nil
-	qb.havingFilters = nil
-	qb.orderColumn = ""
-	qb.orderDirection = ""
+	zero := 0
+	qb.columns = nil
+	qb.limitValue = &zero
+	qb.offsetValue = nil
+	qb.orderItems = nil
 
-	result, err := qb.Execute()
+	result, err := qb.Get()
 
-	qb.columns = savedColumns
-	qb.groupByColumns = savedGroupBy
-	qb.havingFilters = savedHaving
-	qb.orderColumn = savedOrder
-	qb.orderDirection = savedDir
+	qb.columns = savedCols
+	qb.limitValue = savedLimit
+	qb.offsetValue = savedOffset
+	qb.orderItems = savedOrder
+
+	if err != nil {
+		return 0, err
+	}
+	if result.Total != nil {
+		return *result.Total, nil
+	}
+	return result.Count, nil
+}
+
+// Sum returns the sum of a column for matching records.
+func (qb *QueryBuilder) Sum(column string) (float64, error) {
+	savedCols := qb.columns
+	savedLimit := qb.limitValue
+	savedOffset := qb.offsetValue
+
+	qb.columns = []string{fmt.Sprintf("sum(%s)", column)}
+	qb.limitValue = nil
+	qb.offsetValue = nil
+
+	result, err := qb.Get()
+
+	qb.columns = savedCols
+	qb.limitValue = savedLimit
+	qb.offsetValue = savedOffset
 
 	if err != nil {
 		return 0, err
 	}
 	if len(result.Data) > 0 {
-		if v, ok := result.Data[0]["count"]; ok {
-			switch n := v.(type) {
-			case float64:
-				return int(n), nil
-			case json.Number:
-				i, _ := n.Int64()
-				return int(i), nil
-			}
+		if v, ok := result.Data[0]["sum"]; ok {
+			return toFloat64(v), nil
+		}
+	}
+	return 0, nil
+}
+
+// Avg returns the average of a column for matching records.
+func (qb *QueryBuilder) Avg(column string) (float64, error) {
+	savedCols := qb.columns
+	savedLimit := qb.limitValue
+	savedOffset := qb.offsetValue
+
+	qb.columns = []string{fmt.Sprintf("avg(%s)", column)}
+	qb.limitValue = nil
+	qb.offsetValue = nil
+
+	result, err := qb.Get()
+
+	qb.columns = savedCols
+	qb.limitValue = savedLimit
+	qb.offsetValue = savedOffset
+
+	if err != nil {
+		return 0, err
+	}
+	if len(result.Data) > 0 {
+		if v, ok := result.Data[0]["avg"]; ok {
+			return toFloat64(v), nil
 		}
 	}
 	return 0, nil
@@ -279,7 +460,7 @@ func (qb *QueryBuilder) Paginate(page, perPage int) (*PaginatedResponse, error) 
 	offsetVal := (page - 1) * perPage
 	qb.Limit(perPage).Offset(offsetVal)
 
-	result, err := qb.Execute()
+	result, err := qb.Get()
 	if err != nil {
 		return nil, err
 	}
@@ -302,179 +483,85 @@ func (qb *QueryBuilder) Paginate(page, perPage int) (*PaginatedResponse, error) 
 	}, nil
 }
 
-// Update updates records matching the query.
+// Update updates records matching the query filters.
 func (qb *QueryBuilder) Update(data map[string]interface{}) (*UpdateResponse, error) {
-	body := map[string]interface{}{
-		"data": data,
-	}
-	if len(qb.filters) > 0 {
-		body["filters"] = qb.filters
-	}
-
-	resp, err := qb.client.doRequest("PUT", fmt.Sprintf("/%s", qb.tableName), body)
-	if err != nil {
-		return nil, err
-	}
-
-	var result UpdateResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &result, nil
-}
-
-// Delete deletes records matching the query.
-func (qb *QueryBuilder) Delete() (*DeleteResponse, error) {
-	body := make(map[string]interface{})
-	if len(qb.filters) > 0 {
-		body["filters"] = qb.filters
-	}
-
-	resp, err := qb.client.doRequest("DELETE", fmt.Sprintf("/%s", qb.tableName), body)
-	if err != nil {
-		return nil, err
-	}
-
-	var result DeleteResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &result, nil
-}
-
-// ── Internal helpers ────────────────────────────────────────────
-
-func (qb *QueryBuilder) hasAdvancedFeatures(body map[string]interface{}) bool {
-	if _, ok := body["group_by"]; ok {
-		return true
-	}
-	if _, ok := body["having"]; ok {
-		return true
-	}
-	if filters, ok := body["filters"].([]FilterExpression); ok {
-		for _, f := range filters {
-			switch f.Operator {
-			case OpIn, OpNotIn, OpBetween, OpNotBetween:
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (qb *QueryBuilder) executePost(body map[string]interface{}) (*QueryResponse, error) {
-	postBody := make(map[string]interface{})
-
-	if cols, ok := body["select"]; ok {
-		postBody["select"] = cols
-	}
-	if filters := body["filters"]; filters != nil {
-		postBody["filters"] = filters
-	}
-	if gb, ok := body["group_by"]; ok {
-		postBody["group_by"] = gb
-	}
-	if h, ok := body["having"]; ok {
-		postBody["having"] = h
-	}
-	if ob, ok := body["order_by"]; ok {
-		postBody["order_by"] = ob
-		if od, ok := body["order_direction"]; ok {
-			postBody["order_direction"] = od
-		}
-	}
-	if lim, ok := body["limit"]; ok {
-		postBody["limit"] = lim
-	}
-	if off, ok := body["offset"]; ok {
-		postBody["offset"] = off
-	}
-
-	resp, err := qb.client.doRequest("POST", fmt.Sprintf("/%s/query", qb.tableName), postBody)
-	if err != nil {
-		return nil, err
-	}
-
-	var result QueryResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-	return &result, nil
-}
-
-func (qb *QueryBuilder) executeGet(body map[string]interface{}) (*QueryResponse, error) {
-	params := make([]string, 0)
-
-	if cols, ok := body["select"].([]string); ok {
-		params = append(params, "select="+strings.Join(cols, ","))
-	}
-
-	if filters, ok := body["filters"].([]FilterExpression); ok && len(filters) > 0 {
-		parts := make([]string, 0, len(filters))
-		for _, f := range filters {
-			if _, isList := f.Value.([]interface{}); isList {
-				return qb.executePost(body)
-			}
-			parts = append(parts, fmt.Sprintf("%s.%s.%v", f.Column, f.Operator, f.Value))
-		}
-		params = append(params, "filter="+strings.Join(parts, ","))
-	}
-
-	if ob, ok := body["order_by"].(string); ok && ob != "" {
-		params = append(params, "order="+ob)
-		if od, ok := body["order_direction"].(SortDirection); ok {
-			params = append(params, "order_direction="+string(od))
-		}
-	}
-	if lim, ok := body["limit"]; ok {
-		params = append(params, fmt.Sprintf("limit=%v", lim))
-	}
-	if off, ok := body["offset"]; ok {
-		params = append(params, fmt.Sprintf("offset=%v", off))
-	}
-
+	params := filtersToParams(qb.filters)
 	path := fmt.Sprintf("/%s", qb.tableName)
 	if len(params) > 0 {
-		path += "?" + strings.Join(params, "&")
+		path += "?" + params.Encode()
 	}
 
-	resp, err := qb.client.doRequest("GET", path, nil)
+	body, _, err := qb.client.doRequestWithHeaders("PATCH", path, data,
+		map[string]string{"Prefer": "return=representation"})
 	if err != nil {
 		return nil, err
 	}
 
-	var result QueryResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(body, &rows); err != nil {
+		var single map[string]interface{}
+		if err2 := json.Unmarshal(body, &single); err2 != nil {
+			return nil, fmt.Errorf("failed to parse response: %w", err)
+		}
 	}
-	return &result, nil
+	return &UpdateResponse{
+		Message:      "Records updated successfully",
+		AffectedRows: len(rows),
+	}, nil
 }
 
-func (qb *QueryBuilder) buildQueryBody() map[string]interface{} {
-	body := make(map[string]interface{})
-
-	if len(qb.columns) > 0 {
-		body["select"] = qb.columns
-	}
-	if len(qb.filters) > 0 {
-		body["filters"] = qb.filters
-	}
-	if len(qb.groupByColumns) > 0 {
-		body["group_by"] = qb.groupByColumns
-	}
-	if len(qb.havingFilters) > 0 {
-		body["having"] = qb.havingFilters
-	}
-	if qb.orderColumn != "" {
-		body["order_by"] = qb.orderColumn
-		body["order_direction"] = qb.orderDirection
-	}
-	if qb.limitValue != nil {
-		body["limit"] = *qb.limitValue
-	}
-	if qb.offsetValue != nil {
-		body["offset"] = *qb.offsetValue
+// Delete deletes records matching the query filters.
+func (qb *QueryBuilder) Delete() (*DeleteResponse, error) {
+	params := filtersToParams(qb.filters)
+	path := fmt.Sprintf("/%s", qb.tableName)
+	if len(params) > 0 {
+		path += "?" + params.Encode()
 	}
 
-	return body
+	body, _, err := qb.client.doRequestWithHeaders("DELETE", path, nil,
+		map[string]string{"Prefer": "return=representation"})
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(body, &rows); err != nil {
+		rows = nil
+	}
+	return &DeleteResponse{
+		Message:      "Records deleted successfully",
+		AffectedRows: len(rows),
+	}, nil
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+func parseTotalFromContentRange(header string, fallback int) int {
+	if header == "" {
+		return fallback
+	}
+	parts := strings.Split(header, "/")
+	if len(parts) < 2 {
+		return fallback
+	}
+	var n int
+	if _, err := fmt.Sscanf(parts[1], "%d", &n); err != nil {
+		return fallback
+	}
+	return n
+}
+
+func toFloat64(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	case string:
+		var f float64
+		fmt.Sscanf(n, "%f", &f)
+		return f
+	}
+	return 0
 }

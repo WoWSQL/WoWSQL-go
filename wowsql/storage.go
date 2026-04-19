@@ -122,7 +122,7 @@ type StorageClient struct {
 // projectURL can be a slug, domain, or full URL.
 func NewStorageClient(projectURL, apiKey string, opts ...StorageClientOption) *StorageClient {
 	cfg := &storageClientConfig{
-		baseDomain: "wowsql.com",
+		baseDomain: "wowsqlconnect.com",
 		secure:     true,
 		timeout:    60 * time.Second,
 		verifySSL:  true,

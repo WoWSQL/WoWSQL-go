@@ -18,8 +18,8 @@ type QueryResponse struct {
 	Data   []map[string]interface{} `json:"data"`
 	Count  int                      `json:"count"`
 	Total  *int                     `json:"total,omitempty"`
-	Limit  *int                     `json:"limit,omitempty"`
-	Offset *int                     `json:"offset,omitempty"`
+	Limit  int                      `json:"limit"`
+	Offset int                      `json:"offset"`
 	Error  *string                  `json:"error,omitempty"`
 }
 
