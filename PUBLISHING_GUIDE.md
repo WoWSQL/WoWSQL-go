@@ -93,7 +93,7 @@ go test ./...
 git add .
 
 # Commit
-git commit -m "release v2.0.0"
+git commit -m "release v3.1.0"
 
 # Push to GitHub
 git push origin 
@@ -103,8 +103,8 @@ git push origin
 
 ```bash
 # Create and push tag
-git tag v2.0.0
-git push origin v2.0.0
+git tag v3.1.0
+git push origin v3.1.0
 ```
 
 ### Step 5: Publish to pkg.go.dev
@@ -128,7 +128,7 @@ cd test-wowsql
 go mod init test
 
 # Install the package
-go get github.com/wowsql/wowsql-go/wowsql
+go get github.com/wowsql/wowsql-go/
 
 # Create a test file
 cat > main.go << 'EOF'
@@ -192,7 +192,7 @@ git push origin $VERSION
 echo "📚 Triggering pkg.go.dev indexing..."
 GOPROXY=proxy.golang.org go list -m github.com/wowsql/wowsql-go@$VERSION
 
-echo "✅ Done! Visit https://pkg.go.dev/github.com/wowsql/wowsql-go/wowsql"
+echo "✅ Done! Visit https://pkg.go.dev/github.com/wowsql/wowsql-go"
 ```
 
 **Windows (`publish.bat`):**
