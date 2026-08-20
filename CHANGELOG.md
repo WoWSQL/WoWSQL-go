@@ -5,6 +5,20 @@ All notable changes to the WOWSQL Go SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] - 2026-08-20
+
+### Added - Realtime
+
+- `client.Realtime().Subscribe()` for Postgres `INSERT` / `UPDATE` / `DELETE` (and `*`)
+- WebSocket auth: `wss://<project>/realtime/v1/websocket?apikey=<anon or service_role key>`
+- Auto-reconnect after disconnect; unsubscribe / disconnect clean local and server state
+- `client.Realtime().Channel(name)` — ephemeral broadcast (`Send`) and presence (`Track` / `PresenceState`)
+- `github.com/gorilla/websocket` dependency
+
+### Documentation
+
+- README realtime section
+
 ## [1.2.0] - 2025-11-22
 
 ### Added - Schema Management 🔧
@@ -157,7 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Under Consideration
 
-- [ ] Real-time subscriptions (WebSocket)
+- [x] Real-time subscriptions (WebSocket) — shipped in 3.9.0
 - [ ] Code generation for models from schema
 - [ ] Migration tools
 - [ ] GraphQL-like nested queries

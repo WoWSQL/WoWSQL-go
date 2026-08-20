@@ -93,7 +93,7 @@ go test ./...
 git add .
 
 # Commit
-git commit -m "release v3.1.0"
+git commit -m "release v3.9.0"
 
 # Push to GitHub
 git push origin 
@@ -103,8 +103,8 @@ git push origin
 
 ```bash
 # Create and push tag
-git tag v3.1.0
-git push origin v3.1.0
+git tag v3.9.0
+git push origin v3.9.0
 ```
 
 ### Step 5: Publish to pkg.go.dev

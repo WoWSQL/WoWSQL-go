@@ -1,0 +1,4 @@
+github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aNNg=
+github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
+github.com/wowsql/wowsql-go v1.5.0 h1:mgzefdBeusM8+J5eZpQXFKmH3wTkLLXxCdcjfTT5A3s=
+github.com/wowsql/wowsql-go v1.5.0/go.mod h1:dwDN78l8inwMhSdsSXlEcUXobkMvSbcszPwufLLw/Bk=

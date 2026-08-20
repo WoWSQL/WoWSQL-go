@@ -49,6 +49,7 @@ type Client struct {
 	apiKey     string
 	timeout    time.Duration
 	httpClient *http.Client
+	realtime   *Realtime
 }
 
 // NewClient creates a new WowSQL client.
@@ -103,6 +104,9 @@ func (c *Client) Schema() *SchemaClient {
 
 // Close releases resources held by the client.
 func (c *Client) Close() {
+	if c.realtime != nil {
+		c.realtime.Close()
+	}
 	c.httpClient.CloseIdleConnections()
 }
 

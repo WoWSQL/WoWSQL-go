@@ -5,6 +5,7 @@ Official Go client for WowSQL. All data operations communicate directly with Pos
 ## Requirements
 
 - Go 1.19 or later
+- `github.com/gorilla/websocket` (pulled in by the module; used for realtime)
 
 ## Installation
 
@@ -337,6 +338,39 @@ err = schema.ExecuteSQL("CREATE INDEX ON products(name)")
 
 // Drop table
 err = schema.DropTable("products", false)
+```
+
+## Realtime
+
+Subscribe to INSERT / UPDATE / DELETE, broadcast ephemeral events, and track presence. Uses the **same anon or service_role key** as REST.
+
+The SDK connects to:
+
+```
+wss://<project>.wowsqlconnect.com/realtime/v1/websocket?apikey=<wowsql_anon_... or wowsql_service_...>
+```
+
+Enable a table first (`POST /realtime/v1/enable` with `schema_name` and `table_name`) before postgres changes. Channel `Send` / presence do **not** need a Postgres trigger. Payloads are capped at 64 KiB. Missing key closes **4001**; invalid key closes **4003** (do not reconnect). Multi-replica deployments need `REDIS_URL`.
+
+```go
+unsub := client.Realtime().Subscribe("messages", func(change wowsql.RealtimeChange) {
+    fmt.Println(change.Event, change.New)
+}, "public", "*")
+
+ch := client.Realtime().Channel("chat")
+ch.OnBroadcast("typing", func(msg map[string]interface{}) {
+    fmt.Println("typing", msg["payload"])
+})
+ch.OnPresence(func(msg map[string]interface{}) {
+    fmt.Println("online", ch.PresenceState())
+})
+ch.Subscribe(nil)
+ch.Track(map[string]interface{}{"user": "alice"})
+ch.Send("typing", map[string]interface{}{"user": "alice"})
+
+unsub()
+ch.Unsubscribe()
+client.Realtime().Close()
 ```
 
 ## Error Handling
